@@ -5,7 +5,7 @@ Monorepo layout with separate frontend and backend.
 ## Structure
 
 - `frontend/`: Vite + React app
-- `backend/`: Express API
+- `backend/`: FastAPI (async) API
 
 ## Run (frontend)
 
@@ -19,8 +19,9 @@ npm run dev
 
 ```bash
 cd backend
-npm install
-npm run dev
+cp env.example .env
+uv sync
+uv run uvicorn app.main:app --reload --host 0.0.0.0 --port ${PORT:-3001}
 ```
 
 ## Root scripts (optional)

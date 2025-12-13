@@ -1,0 +1,3 @@
+"""ClassMate FastAPI backend package."""
+
+
