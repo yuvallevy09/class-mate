@@ -1,0 +1,14 @@
+{
+  "name": "classmate",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": "npm --prefix backend run dev",
+    "build:frontend": "npm --prefix frontend run build",
+    "preview:frontend": "npm --prefix frontend run preview",
+    "lint:frontend": "npm --prefix frontend run lint",
+    "install:frontend": "npm --prefix frontend install",
+    "install:backend": "npm --prefix backend install"
+  }
+}
