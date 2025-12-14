@@ -18,3 +18,8 @@ class RefreshResponse(BaseModel):
 
 class LogoutResponse(BaseModel):
     ok: bool = True
+
+
+class CsrfResponse(BaseModel):
+    ok: bool = True
+    csrfToken: str

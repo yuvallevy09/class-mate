@@ -97,3 +97,27 @@ def clear_refresh_cookie(*, response, settings) -> None:
         domain=settings.cookie_domain,
         path=settings.refresh_cookie_path,
     )
+
+
+def create_csrf_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def set_csrf_cookie(*, response, token: str, settings) -> None:
+    response.set_cookie(
+        key=settings.csrf_cookie_name,
+        value=token,
+        httponly=False,
+        secure=bool(settings.cookie_secure),
+        samesite=settings.csrf_cookie_samesite,
+        domain=settings.cookie_domain,
+        path=settings.csrf_cookie_path,
+    )
+
+
+def clear_csrf_cookie(*, response, settings) -> None:
+    response.delete_cookie(
+        key=settings.csrf_cookie_name,
+        domain=settings.cookie_domain,
+        path=settings.csrf_cookie_path,
+    )

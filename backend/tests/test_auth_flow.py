@@ -69,9 +69,23 @@ async def test_login_refresh_rotation_logout_flow() -> None:
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        csrf = await client.get("/api/v1/auth/csrf")
+        assert csrf.status_code == 200
+        assert csrf.headers.get("cache-control") == "no-store"
+        csrf_token = csrf.json()["csrfToken"]
+        assert csrf_token
+
+        # CSRF must be present for login.
+        missing_csrf = await client.post(
+            "/api/v1/auth/login",
+            json={"email": email, "password": password},
+        )
+        assert missing_csrf.status_code == 403
+
         resp = await client.post(
             "/api/v1/auth/login",
             json={"email": email, "password": password},
+            headers={settings.csrf_header_name: csrf_token},
         )
         assert resp.status_code == 200
 
@@ -88,7 +102,13 @@ async def test_login_refresh_rotation_logout_flow() -> None:
         assert data["id"] == user.id
         assert data["email"] == email
 
-        refresh1 = await client.post("/api/v1/auth/refresh")
+        missing_csrf_refresh = await client.post("/api/v1/auth/refresh")
+        assert missing_csrf_refresh.status_code == 403
+
+        refresh1 = await client.post(
+            "/api/v1/auth/refresh",
+            headers={settings.csrf_header_name: csrf_token},
+        )
         assert refresh1.status_code == 200
 
         new_refresh = client.cookies.get(settings.refresh_cookie_name)
@@ -97,6 +117,10 @@ async def test_login_refresh_rotation_logout_flow() -> None:
 
         # Replay old refresh token should fail (rotation).
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as replay_client:
+            # CSRF must be present for refresh.
+            replay_csrf = await replay_client.get("/api/v1/auth/csrf")
+            replay_token = replay_csrf.json()["csrfToken"]
+            replay_client.headers[settings.csrf_header_name] = replay_token
             replay_client.cookies.set(
                 settings.refresh_cookie_name,
                 old_refresh,
@@ -109,7 +133,13 @@ async def test_login_refresh_rotation_logout_flow() -> None:
         assert replay.status_code == 401
 
         # Logout should clear cookies.
-        logout = await client.post("/api/v1/auth/logout")
+        missing_csrf_logout = await client.post("/api/v1/auth/logout")
+        assert missing_csrf_logout.status_code == 403
+
+        logout = await client.post(
+            "/api/v1/auth/logout",
+            headers={settings.csrf_header_name: csrf_token},
+        )
         assert logout.status_code == 200
 
         after_logout = await client.get("/api/v1/users/me")

@@ -11,9 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import (
     clear_access_cookie,
     clear_refresh_cookie,
+    create_csrf_token,
     create_access_token,
     create_refresh_token,
     hash_refresh_token,
+    set_csrf_cookie,
     set_access_cookie,
     set_refresh_cookie,
     verify_password,
@@ -22,9 +24,18 @@ from app.core.settings import Settings, get_settings
 from app.db.models.refresh_session import RefreshSession
 from app.db.models.user import User
 from app.db.session import get_db
-from app.schemas.auth import LoginRequest, LoginResponse, LogoutResponse, RefreshResponse
+from app.schemas.auth import CsrfResponse, LoginRequest, LoginResponse, LogoutResponse, RefreshResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+@router.get("/csrf", response_model=CsrfResponse)
+async def csrf(settings: Settings = Depends(get_settings)):
+    token = create_csrf_token()
+    response = JSONResponse(CsrfResponse(ok=True, csrfToken=token).model_dump())
+    response.headers["Cache-Control"] = "no-store"
+    set_csrf_cookie(response=response, token=token, settings=settings)
+    return response
 
 
 @router.post("/login", response_model=LoginResponse)

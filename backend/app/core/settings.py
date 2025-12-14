@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import List
+from typing import List, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -33,7 +33,16 @@ class Settings(BaseSettings):
 
     cookie_secure: bool = Field(default=False, validation_alias="COOKIE_SECURE")
     cookie_domain: str | None = Field(default=None, validation_alias="COOKIE_DOMAIN")
-    cookie_samesite: str = Field(default="lax", validation_alias="COOKIE_SAMESITE")
+    cookie_samesite: Literal["lax", "strict", "none"] = Field(default="lax", validation_alias="COOKIE_SAMESITE")
+
+    # CSRF (double-submit cookie)
+    csrf_enabled: bool = Field(default=True, validation_alias="CSRF_ENABLED")
+    csrf_cookie_name: str = Field(default="csrf_token", validation_alias="CSRF_COOKIE_NAME")
+    csrf_header_name: str = Field(default="X-CSRF-Token", validation_alias="CSRF_HEADER_NAME")
+    csrf_cookie_path: str = Field(default="/", validation_alias="CSRF_COOKIE_PATH")
+    csrf_cookie_samesite: Literal["lax", "strict", "none"] = Field(
+        default="lax", validation_alias="CSRF_COOKIE_SAMESITE"
+    )
 
     @field_validator("cors_origins", mode="before")
     @classmethod
@@ -47,6 +56,13 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [s.strip() for s in v.split(",") if s.strip()]
         return v
+
+    @model_validator(mode="after")
+    def _validate_cookie_policy(self) -> "Settings":
+        # If SameSite=None, browsers require Secure=true for cookies to be accepted.
+        if self.cookie_samesite == "none" and not self.cookie_secure:
+            raise ValueError("COOKIE_SECURE must be true when COOKIE_SAMESITE is 'none'")
+        return self
 
 
 @lru_cache(maxsize=1)
