@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     jwt_refresh_ttl_seconds: int = Field(default=1209600, validation_alias="JWT_REFRESH_TTL_SECONDS")
 
     access_cookie_name: str = Field(default="access_token", validation_alias="ACCESS_COOKIE_NAME")
+    refresh_cookie_name: str = Field(default="refresh_token", validation_alias="REFRESH_COOKIE_NAME")
+    refresh_cookie_path: str = Field(default="/api/v1/auth", validation_alias="REFRESH_COOKIE_PATH")
 
     cookie_secure: bool = Field(default=False, validation_alias="COOKIE_SECURE")
     cookie_domain: str | None = Field(default=None, validation_alias="COOKIE_DOMAIN")

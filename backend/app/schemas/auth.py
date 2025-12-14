@@ -10,3 +10,11 @@ class LoginRequest(BaseModel):
 
 class LoginResponse(BaseModel):
     ok: bool = True
+
+
+class RefreshResponse(BaseModel):
+    ok: bool = True
+
+
+class LogoutResponse(BaseModel):
+    ok: bool = True

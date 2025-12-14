@@ -51,7 +51,7 @@ def _run_migrations_sync() -> None:
 
 
 @pytest.mark.asyncio
-async def test_login_sets_cookie_and_users_me_returns_user() -> None:
+async def test_login_refresh_rotation_logout_flow() -> None:
     settings = get_settings()
 
     if not await _can_connect(settings.database_url):
@@ -77,9 +77,40 @@ async def test_login_sets_cookie_and_users_me_returns_user() -> None:
 
         set_cookie_headers = resp.headers.get_list("set-cookie")
         assert any(settings.access_cookie_name in h for h in set_cookie_headers)
+        assert any(settings.refresh_cookie_name in h for h in set_cookie_headers)
+
+        old_refresh = client.cookies.get(settings.refresh_cookie_name)
+        assert old_refresh is not None
 
         me = await client.get("/api/v1/users/me")
         assert me.status_code == 200
         data = me.json()
         assert data["id"] == user.id
         assert data["email"] == email
+
+        refresh1 = await client.post("/api/v1/auth/refresh")
+        assert refresh1.status_code == 200
+
+        new_refresh = client.cookies.get(settings.refresh_cookie_name)
+        assert new_refresh is not None
+        assert new_refresh != old_refresh
+
+        # Replay old refresh token should fail (rotation).
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as replay_client:
+            replay_client.cookies.set(
+                settings.refresh_cookie_name,
+                old_refresh,
+                domain="test",
+                path="/",
+            )
+            replay = await replay_client.post(
+                "/api/v1/auth/refresh",
+            )
+        assert replay.status_code == 401
+
+        # Logout should clear cookies.
+        logout = await client.post("/api/v1/auth/logout")
+        assert logout.status_code == 200
+
+        after_logout = await client.get("/api/v1/users/me")
+        assert after_logout.status_code == 401

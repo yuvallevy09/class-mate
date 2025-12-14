@@ -1,15 +1,28 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import create_access_token, set_access_cookie, verify_password
+from app.core.security import (
+    clear_access_cookie,
+    clear_refresh_cookie,
+    create_access_token,
+    create_refresh_token,
+    hash_refresh_token,
+    set_access_cookie,
+    set_refresh_cookie,
+    verify_password,
+)
 from app.core.settings import Settings, get_settings
+from app.db.models.refresh_session import RefreshSession
 from app.db.models.user import User
 from app.db.session import get_db
-from app.schemas.auth import LoginRequest, LoginResponse
+from app.schemas.auth import LoginRequest, LoginResponse, LogoutResponse, RefreshResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -26,12 +39,112 @@ async def login(
     if user is None or not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-    token = create_access_token(
+    access_token = create_access_token(
         subject=str(user.id),
         ttl_seconds=settings.jwt_access_ttl_seconds,
         secret=settings.jwt_secret,
     )
 
     response = JSONResponse(LoginResponse(ok=True).model_dump())
-    set_access_cookie(response=response, token=token, settings=settings)
+
+    # Refresh session (opaque token stored as cookie, hashed in DB).
+    now = datetime.now(timezone.utc)
+    refresh_token = create_refresh_token()
+    refresh_token_hash = hash_refresh_token(refresh_token, settings.jwt_secret)
+    refresh_expires_at = now + timedelta(seconds=int(settings.jwt_refresh_ttl_seconds))
+
+    db.add(
+        RefreshSession(
+            user_id=user.id,
+            token_hash=refresh_token_hash,
+            expires_at=refresh_expires_at,
+        )
+    )
+    await db.commit()
+
+    set_access_cookie(response=response, token=access_token, settings=settings)
+    set_refresh_cookie(response=response, token=refresh_token, settings=settings)
+    return response
+
+
+@router.post("/refresh", response_model=RefreshResponse)
+async def refresh(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    refresh_token = request.cookies.get(settings.refresh_cookie_name)
+    if not refresh_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+    refresh_token_hash = hash_refresh_token(refresh_token, settings.jwt_secret)
+    now = datetime.now(timezone.utc)
+
+    res = await db.execute(
+        select(RefreshSession).where(
+            RefreshSession.token_hash == refresh_token_hash,
+            RefreshSession.revoked_at.is_(None),
+            RefreshSession.expires_at > now,
+        )
+    )
+    session = res.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+    user_res = await db.execute(select(User).where(User.id == session.user_id))
+    user = user_res.scalar_one_or_none()
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+    # Rotate refresh token.
+    new_refresh_token = create_refresh_token()
+    new_refresh_hash = hash_refresh_token(new_refresh_token, settings.jwt_secret)
+    new_refresh_expires_at = now + timedelta(seconds=int(settings.jwt_refresh_ttl_seconds))
+
+    new_session = RefreshSession(
+        id=uuid4(),
+        user_id=user.id,
+        token_hash=new_refresh_hash,
+        expires_at=new_refresh_expires_at,
+    )
+
+    # Ensure the new session exists before pointing the old one at it.
+    db.add(new_session)
+    await db.flush()
+
+    session.revoked_at = now
+    session.replaced_by_id = new_session.id
+    await db.commit()
+
+    access_token = create_access_token(
+        subject=str(user.id),
+        ttl_seconds=settings.jwt_access_ttl_seconds,
+        secret=settings.jwt_secret,
+    )
+
+    response = JSONResponse(RefreshResponse(ok=True).model_dump())
+    set_access_cookie(response=response, token=access_token, settings=settings)
+    set_refresh_cookie(response=response, token=new_refresh_token, settings=settings)
+    return response
+
+
+@router.post("/logout", response_model=LogoutResponse)
+async def logout(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    refresh_token = request.cookies.get(settings.refresh_cookie_name)
+    if refresh_token:
+        refresh_token_hash = hash_refresh_token(refresh_token, settings.jwt_secret)
+        now = datetime.now(timezone.utc)
+        res = await db.execute(select(RefreshSession).where(RefreshSession.token_hash == refresh_token_hash))
+        session = res.scalar_one_or_none()
+        if session is not None and session.revoked_at is None:
+            session.revoked_at = now
+            await db.commit()
+
+    response = JSONResponse(LogoutResponse(ok=True).model_dump())
+    clear_access_cookie(response=response, settings=settings)
+    clear_refresh_cookie(response=response, settings=settings)
     return response

@@ -18,6 +18,7 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.core.settings import get_settings  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.models import user as _user_model  # noqa: F401,E402
+from app.db.models import refresh_session as _refresh_session_model  # noqa: F401,E402
 
 # Alembic Config object.
 config = context.config
