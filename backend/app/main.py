@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.router import api_router
 from app.core.settings import get_settings
 from app.db.session import get_db
 
@@ -30,6 +31,8 @@ def create_app() -> FastAPI:
     async def health_db(db: AsyncSession = Depends(get_db)):
         await db.execute(text("SELECT 1"))
         return {"ok": True}
+
+    app.include_router(api_router, prefix="/api/v1")
 
     return app
 
