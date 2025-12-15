@@ -1,8 +1,8 @@
 import React from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { client } from "@/api/client";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { BookOpen, User, LogOut, Menu } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -15,13 +15,26 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 export default function Navbar({ onMenuClick, showMenu = false }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
   const { data: user } = useQuery({
-    queryKey: ['currentUser'],
-    queryFn: () => client.auth.me()
+    queryKey: ["currentUser"],
+    queryFn: () => client.auth.me(),
+    retry: false,
   });
 
   const handleLogout = () => {
-    client.auth.logout();
+    client.auth
+      .logout()
+      .catch(() => {
+        // If logout fails, still treat as logged-out in UI.
+      })
+      .finally(() => {
+        queryClient.invalidateQueries({ queryKey: ["currentUser"] });
+        navigate("/");
+      });
   };
 
   return (
@@ -47,12 +60,12 @@ export default function Navbar({ onMenuClick, showMenu = false }) {
                   <div className="w-9 h-9 rounded-full bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center">
                     <User className="w-5 h-5 text-white" />
                   </div>
-                  <span className="text-sm font-medium hidden sm:block">{user.full_name || user.email}</span>
+                  <span className="text-sm font-medium hidden sm:block">{user.email}</span>
                 </Button>
               </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48 bg-[#131313] border-white/10 text-white">
               <div className="px-2 py-2">
-                <p className="text-sm font-medium">{user.full_name}</p>
+                <p className="text-sm font-medium">Signed in</p>
                 <p className="text-xs text-gray-400">{user.email}</p>
               </div>
               <DropdownMenuSeparator className="bg-white/10" />
@@ -62,6 +75,16 @@ export default function Navbar({ onMenuClick, showMenu = false }) {
               </DropdownMenuItem>
             </DropdownMenuContent>
             </DropdownMenu>
+          )}
+          {!user && (
+            <Link
+              to={`/login?next=${encodeURIComponent(`${location.pathname}${location.search}`)}`}
+              className="hidden sm:block"
+            >
+              <Button className="btn-gradient rounded-full px-5 py-3 h-auto font-semibold whitespace-nowrap">
+                Login
+              </Button>
+            </Link>
           )}
           {showMenu && (
             <Button

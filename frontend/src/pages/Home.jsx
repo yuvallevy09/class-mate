@@ -9,11 +9,12 @@ import Navbar from "@/components/Navbar";
 
 export default function Home() {
   const { data: user } = useQuery({
-    queryKey: ['currentUser'],
-    queryFn: () => client.auth.me()
+    queryKey: ["currentUser"],
+    queryFn: () => client.auth.me(),
+    retry: false,
   });
 
-  const firstName = user?.full_name?.split(' ')[0] || user?.email?.split('@')[0] || 'there';
+  const firstName = user?.email?.split("@")[0] || "there";
 
   return (
     <div className="min-h-screen relative overflow-hidden">

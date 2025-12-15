@@ -8,6 +8,8 @@ import CourseChat from "./CourseChat";
 
 import CourseContent from "./CourseContent";
 
+import Login from "./Login";
+
 import { BrowserRouter as Router, Route, Routes, useLocation } from 'react-router-dom';
 
 const PAGES = {
@@ -19,6 +21,8 @@ const PAGES = {
     CourseChat: CourseChat,
     
     CourseContent: CourseContent,
+
+    Login: Login,
     
 }
 
@@ -54,6 +58,8 @@ function PagesContent() {
                 <Route path="/CourseChat" element={<CourseChat />} />
                 
                 <Route path="/CourseContent" element={<CourseContent />} />
+
+                <Route path="/login" element={<Login />} />
                 
             </Routes>
         </Layout>

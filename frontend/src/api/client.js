@@ -1,5 +1,6 @@
+import * as realAuth from "./auth";
+
 const DB_KEY = "classmate_db_v1";
-const USER_KEY = "classmate_user_v1";
 
 function uid() {
   return globalThis.crypto?.randomUUID?.() ?? `id_${Math.random().toString(16).slice(2)}_${Date.now()}`;
@@ -47,26 +48,22 @@ function matchesWhere(item, where = {}) {
   return true;
 }
 
-function ensureUser() {
-  try {
-    const raw = localStorage.getItem(USER_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {
-    // ignore
-  }
-  const user = { id: uid(), full_name: "You", email: "you@example.com" };
-  localStorage.setItem(USER_KEY, JSON.stringify(user));
-  return user;
-}
-
 export const client = {
   auth: {
     async me() {
-      return ensureUser();
+      return realAuth.me();
     },
-    logout() {
-      localStorage.removeItem(USER_KEY);
-      window.location.assign("/");
+    async csrf() {
+      return realAuth.csrf();
+    },
+    async login({ email, password }) {
+      return realAuth.login(email, password);
+    },
+    async refresh() {
+      return realAuth.refresh();
+    },
+    async logout() {
+      return realAuth.logout();
     },
   },
 

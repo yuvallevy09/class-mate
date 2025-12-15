@@ -62,6 +62,8 @@ class Settings(BaseSettings):
         # If SameSite=None, browsers require Secure=true for cookies to be accepted.
         if self.cookie_samesite == "none" and not self.cookie_secure:
             raise ValueError("COOKIE_SECURE must be true when COOKIE_SAMESITE is 'none'")
+        if self.csrf_cookie_samesite == "none" and not self.cookie_secure:
+            raise ValueError("COOKIE_SECURE must be true when CSRF_COOKIE_SAMESITE is 'none'")
         return self
 
 

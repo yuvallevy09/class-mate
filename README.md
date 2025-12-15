@@ -15,6 +15,10 @@ npm install
 npm run dev
 ```
 
+### Frontend env
+
+- Copy `frontend/env.example` to `frontend/.env.local` (or `frontend/.env`) and set `VITE_API_URL` to your API origin (e.g. `http://localhost:3001`).
+
 ## Run (backend)
 
 ```bash
