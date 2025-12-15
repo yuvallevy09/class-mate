@@ -12,6 +12,8 @@ function getSafeNext(search) {
   const next = new URLSearchParams(search).get("next") || "/";
   // Only allow a safe relative path.
   if (!next.startsWith("/") || next.startsWith("//") || next.includes("://")) return "/";
+  // Avoid redirect loops back to the login page.
+  if (next === "/login" || next.startsWith("/login?")) return "/";
   return next;
 }
 

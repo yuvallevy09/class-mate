@@ -36,10 +36,7 @@ export default function Courses() {
   });
 
   const createCourseMutation = useMutation({
-    mutationFn: (courseData) => client.entities.Course.create({
-      ...courseData,
-      color: GRADIENT_COLORS[Math.floor(Math.random() * GRADIENT_COLORS.length)]
-    }),
+    mutationFn: (courseData) => client.entities.Course.create(courseData),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['courses'] });
       setIsAddDialogOpen(false);
@@ -47,7 +44,23 @@ export default function Courses() {
     }
   });
 
-  const filteredCourses = courses.filter(course =>
+  const hashString = (s) => {
+    let h = 0;
+    for (let i = 0; i < s.length; i += 1) {
+      h = ((h << 5) - h) + s.charCodeAt(i);
+      h |= 0; // keep 32-bit
+    }
+    return Math.abs(h);
+  };
+
+  const coursesWithColor = courses.map((course) => ({
+    ...course,
+    color:
+      course.color ||
+      GRADIENT_COLORS[hashString(String(course.id || "")) % GRADIENT_COLORS.length],
+  }));
+
+  const filteredCourses = coursesWithColor.filter(course =>
     course.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     course.description?.toLowerCase().includes(searchQuery.toLowerCase())
   );

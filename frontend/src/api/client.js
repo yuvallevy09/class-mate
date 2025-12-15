@@ -1,4 +1,5 @@
 import * as realAuth from "./auth";
+import * as realCourses from "./courses";
 
 const DB_KEY = "classmate_db_v1";
 
@@ -70,27 +71,33 @@ export const client = {
   entities: {
     Course: {
       async list(order) {
-        const db = loadDB();
-        return sortByCreatedDate(db.courses, order);
+        const courses = await realCourses.listCourses();
+        const normalized = (Array.isArray(courses) ? courses : []).map((c) => ({
+          ...c,
+          // Keep legacy field name used by the UI/local DB.
+          created_date: c.created_at,
+        }));
+        return sortByCreatedDate(normalized, order);
       },
       async filter(where, order) {
-        const db = loadDB();
-        const filtered = db.courses.filter((c) => matchesWhere(c, where));
+        if (where?.id) {
+          const course = await realCourses.getCourse(where.id);
+          const normalized = { ...course, created_date: course.created_at };
+          return [normalized];
+        }
+        const all = await this.list(order);
+        const filtered = all.filter((c) => matchesWhere(c, where));
         return sortByCreatedDate(filtered, order);
       },
       async create(data) {
-        const db = loadDB();
-        const course = {
-          id: uid(),
-          created_date: nowIso(),
+        const created = await realCourses.createCourse({
           name: data?.name ?? "",
           description: data?.description ?? "",
-          instructor: data?.instructor,
-          color: data?.color,
-        };
-        db.courses.push(course);
-        saveDB(db);
-        return course;
+        });
+        return { ...created, created_date: created.created_at };
+      },
+      async delete(id) {
+        return realCourses.deleteCourse(id);
       },
     },
 
