@@ -14,7 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-export default function Navbar({ onMenuClick, showMenu = false }) {
+export default function Navbar({ onMenuClick, showMenu = false, authVariant = "login" }) {
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -76,13 +76,13 @@ export default function Navbar({ onMenuClick, showMenu = false }) {
             </DropdownMenuContent>
             </DropdownMenu>
           )}
-          {!user && (
+          {!user && authVariant !== "none" && (
             <Link
-              to={`/login?next=${encodeURIComponent(`${location.pathname}${location.search}`)}`}
+              to={`/${authVariant}?next=${encodeURIComponent(`${location.pathname}${location.search}`)}`}
               className="hidden sm:block"
             >
               <Button className="btn-gradient rounded-full px-5 py-3 h-auto font-semibold whitespace-nowrap">
-                Login
+                {authVariant === "signup" ? "Sign up" : "Login"}
               </Button>
             </Link>
           )}

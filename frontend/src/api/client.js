@@ -60,6 +60,9 @@ export const client = {
     async login({ email, password }) {
       return realAuth.login(email, password);
     },
+    async signup({ displayName, email, password }) {
+      return realAuth.signup(email, password, displayName);
+    },
     async refresh() {
       return realAuth.refresh();
     },

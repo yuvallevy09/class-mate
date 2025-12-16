@@ -12,12 +12,13 @@ function getSafeNext(search) {
   const next = new URLSearchParams(search).get("next") || "/";
   // Only allow a safe relative path.
   if (!next.startsWith("/") || next.startsWith("//") || next.includes("://")) return "/";
-  // Avoid redirect loops back to the login page.
+  // Avoid redirect loops back to auth pages.
   if (next === "/login" || next.startsWith("/login?")) return "/";
+  if (next === "/signup" || next.startsWith("/signup?")) return "/";
   return next;
 }
 
-export default function Login() {
+export default function Signup() {
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -34,14 +35,22 @@ export default function Login() {
     if (user) navigate(next);
   }, [user, navigate, next]);
 
+  const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
 
-  const loginMutation = useMutation({
+  const signupMutation = useMutation({
     mutationFn: async () => {
       setError("");
-      await client.auth.login({ email, password });
+
+      const dn = displayName.trim();
+      if (!dn) throw new Error("Name is required");
+      if (password.length < 8) throw new Error("Password must be at least 8 characters");
+      if (password !== confirm) throw new Error("Passwords do not match");
+
+      await client.auth.signup({ displayName: dn, email, password });
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["currentUser"] });
@@ -51,22 +60,23 @@ export default function Login() {
       const msg =
         e?.data?.detail ||
         (typeof e?.message === "string" ? e.message : null) ||
-        "Login failed";
+        "Signup failed";
       setError(msg);
     },
   });
 
   const onSubmit = (e) => {
     e.preventDefault();
-    if (!email.trim() || !password) return;
-    loginMutation.mutate();
+    if (!displayName.trim() || !email.trim() || !password || !confirm) return;
+    signupMutation.mutate();
   };
 
   return (
     <div className="min-h-screen relative overflow-hidden">
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-1/4 -left-32 w-96 h-96 bg-pink-500/10 rounded-full blur-[120px]" />
-        <div className="absolute bottom-1/4 -right-32 w-96 h-96 bg-purple-500/10 rounded-full blur-[120px]" />
+        <div className="absolute top-1/3 -right-40 w-[520px] h-[520px] bg-purple-500/10 rounded-full blur-[140px]" />
+        <div className="absolute bottom-1/4 left-1/3 w-96 h-96 bg-blue-500/10 rounded-full blur-[120px]" />
       </div>
 
       <Navbar authVariant="none" />
@@ -75,13 +85,25 @@ export default function Login() {
         <div className="max-w-md mx-auto">
           <Card className="bg-white/5 border-white/10 text-white">
             <CardHeader>
-              <CardTitle className="text-2xl font-bold">Login</CardTitle>
+              <CardTitle className="text-2xl font-bold">Create your account</CardTitle>
               <p className="text-sm text-gray-400">
-                Sign in to connect the UI to the real backend session.
+                Start organizing your materials and get an AI assistant that understands your course content.
               </p>
             </CardHeader>
             <CardContent>
               <form onSubmit={onSubmit} className="space-y-5">
+                <div className="space-y-2">
+                  <Label className="text-gray-300">Name</Label>
+                  <Input
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    placeholder="e.g., John"
+                    className="bg-white/5 border-white/10 text-white placeholder:text-gray-500 focus:border-purple-500/50"
+                    autoComplete="name"
+                    required
+                  />
+                </div>
+
                 <div className="space-y-2">
                   <Label className="text-gray-300">Email</Label>
                   <Input
@@ -101,9 +123,22 @@ export default function Login() {
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••"
+                    placeholder="At least 8 characters"
                     className="bg-white/5 border-white/10 text-white placeholder:text-gray-500 focus:border-purple-500/50"
-                    autoComplete="current-password"
+                    autoComplete="new-password"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-gray-300">Confirm password</Label>
+                  <Input
+                    type="password"
+                    value={confirm}
+                    onChange={(e) => setConfirm(e.target.value)}
+                    placeholder="Re-enter your password"
+                    className="bg-white/5 border-white/10 text-white placeholder:text-gray-500 focus:border-purple-500/50"
+                    autoComplete="new-password"
                     required
                   />
                 </div>
@@ -116,19 +151,25 @@ export default function Login() {
 
                 <Button
                   type="submit"
-                  disabled={loginMutation.isPending || !email.trim() || !password}
+                  disabled={
+                    signupMutation.isPending ||
+                    !displayName.trim() ||
+                    !email.trim() ||
+                    !password ||
+                    !confirm
+                  }
                   className="w-full btn-gradient rounded-xl h-12 font-semibold"
                 >
-                  {loginMutation.isPending ? "Signing in..." : "Sign in"}
+                  {signupMutation.isPending ? "Creating account..." : "Create account"}
                 </Button>
 
                 <div className="text-xs text-gray-500">
-                  Don’t have an account?{" "}
+                  Already have an account?{" "}
                   <Link
-                    to={`/signup?next=${encodeURIComponent(next)}`}
+                    to={`/login?next=${encodeURIComponent(next)}`}
                     className="text-purple-300 hover:underline"
                   >
-                    Sign up
+                    Sign in
                   </Link>
                 </div>
               </form>

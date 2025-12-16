@@ -9,6 +9,7 @@ import CourseChat from "./CourseChat";
 import CourseContent from "./CourseContent";
 
 import Login from "./Login";
+import Signup from "./Signup";
 
 import { BrowserRouter as Router, Route, Routes, useLocation } from 'react-router-dom';
 import RequireAuth from "@/components/RequireAuth";
@@ -24,6 +25,8 @@ const PAGES = {
     CourseContent: CourseContent,
 
     Login: Login,
+
+    Signup: Signup,
     
 }
 
@@ -61,6 +64,7 @@ function PagesContent() {
                 <Route path="/CourseContent" element={<RequireAuth><CourseContent /></RequireAuth>} />
 
                 <Route path="/login" element={<Login />} />
+                <Route path="/signup" element={<Signup />} />
                 
             </Routes>
         </Layout>

@@ -13,6 +13,15 @@ export async function login(email, password) {
   });
 }
 
+export async function signup(email, password, displayName) {
+  await ensureCsrf();
+  return request("/api/v1/auth/signup", {
+    method: "POST",
+    body: { email, password, displayName },
+    _skipRefresh: true,
+  });
+}
+
 export async function logout() {
   await ensureCsrf();
   return request("/api/v1/auth/logout", {
