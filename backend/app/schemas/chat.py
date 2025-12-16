@@ -36,3 +36,4 @@ class CourseChatRequest(BaseModel):
 class CourseChatResponse(BaseModel):
     text: str
     citations: list[ChatCitation] = Field(default_factory=list)
+    conversation_id: UUID | None = Field(default=None, serialization_alias="conversationId")

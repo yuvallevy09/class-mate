@@ -115,6 +115,26 @@ async def test_course_chat_requires_csrf_and_auth_and_ownership_and_valid_messag
         body = ok.json()
         assert isinstance(body.get("text"), str) and body["text"]
         assert body.get("citations") == []
+        assert isinstance(body.get("conversationId"), str) and body["conversationId"]
+
+        convo_id = body["conversationId"]
+
+        # Messages are persisted (user + assistant).
+        msgs = await c1.get(f"/api/v1/conversations/{convo_id}/messages")
+        assert msgs.status_code == 200
+        messages = msgs.json()
+        assert isinstance(messages, list) and len(messages) == 2
+        assert messages[0]["role"] == "user"
+        assert messages[0]["content"] == "hello"
+        assert messages[1]["role"] == "assistant"
+        assert "(stub)" in messages[1]["content"]
+
+        # Conversations are listed per course (most recent first).
+        convos = await c1.get(f"/api/v1/courses/{course1_id}/conversations")
+        assert convos.status_code == 200
+        convos_body = convos.json()
+        assert isinstance(convos_body, list) and len(convos_body) == 1
+        assert convos_body[0]["id"] == convo_id
 
         # Empty/whitespace message should be rejected by request validation.
         empty = await c1.post(
@@ -167,3 +187,37 @@ async def test_course_chat_requires_csrf_and_auth_and_ownership_and_valid_messag
             headers={settings.csrf_header_name: token3},
         )
         assert forbidden.status_code == 404
+
+    # Ownership: user1 cannot read user2 conversation messages.
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c2_again:
+        csrf4 = await c2_again.get("/api/v1/auth/csrf")
+        token4 = csrf4.json()["csrfToken"]
+        login2_again = await c2_again.post(
+            "/api/v1/auth/login",
+            json={"email": user2_email, "password": password},
+            headers={settings.csrf_header_name: token4},
+        )
+        assert login2_again.status_code == 200
+
+        # Create a conversation on user2's course.
+        chat2 = await c2_again.post(
+            f"/api/v1/courses/{course2_id}/chat",
+            json={"message": "secret"},
+            headers={settings.csrf_header_name: token4},
+        )
+        assert chat2.status_code == 200
+        convo2_id = chat2.json()["conversationId"]
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c1_third:
+        csrf5 = await c1_third.get("/api/v1/auth/csrf")
+        token5 = csrf5.json()["csrfToken"]
+        login1_third = await c1_third.post(
+            "/api/v1/auth/login",
+            json={"email": user1_email, "password": password},
+            headers={settings.csrf_header_name: token5},
+        )
+        assert login1_third.status_code == 200
+
+        # Should be hidden as 404 (ownership).
+        msgs_forbidden = await c1_third.get(f"/api/v1/conversations/{convo2_id}/messages")
+        assert msgs_forbidden.status_code == 404

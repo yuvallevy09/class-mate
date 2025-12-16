@@ -20,6 +20,9 @@ from app.db.base import Base  # noqa: E402
 from app.db.models import user as _user_model  # noqa: F401,E402
 from app.db.models import refresh_session as _refresh_session_model  # noqa: F401,E402
 from app.db.models import course as _course_model  # noqa: F401,E402
+from app.db.models import course_content as _course_content_model  # noqa: F401,E402
+from app.db.models import chat_conversation as _chat_conversation_model  # noqa: F401,E402
+from app.db.models import chat_message as _chat_message_model  # noqa: F401,E402
 
 # Alembic Config object.
 config = context.config

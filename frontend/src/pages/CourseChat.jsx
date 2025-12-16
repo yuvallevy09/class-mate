@@ -1,12 +1,12 @@
-import React, { useState, useRef, useEffect } from "react";
-import { Link } from "react-router-dom";
+import React, { useState, useRef, useEffect, useMemo } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { client } from "@/api/client";
-import { listCourseContents } from "@/api/courseContents";
+import { listCourseConversations, listConversationMessages, sendCourseChat } from "@/api/chat";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-import { 
-  X, Send, BookOpen, FileText, 
+import {
+  X, Send, BookOpen, FileText,
   ClipboardList, FolderOpen, Sparkles, Loader2,
   Image, FileQuestion, PenTool, MessageSquarePlus, History, ChevronRight
 } from "lucide-react";
@@ -26,8 +26,10 @@ const SIDEBAR_ITEMS = [
 ];
 
 export default function CourseChat() {
-  const urlParams = new URLSearchParams(window.location.search);
-  const courseId = urlParams.get("id");
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const courseId = searchParams.get("id");
+  const conversationId = searchParams.get("conversationId");
   const chatEnabled =
     String(import.meta.env.VITE_CHAT_ENABLED ?? "")
       .trim()
@@ -50,47 +52,46 @@ export default function CourseChat() {
     enabled: !!courseId
   });
 
-  const { data: messages = [] } = useQuery({
-    queryKey: ['messages', courseId],
-    queryFn: () => client.entities.ChatMessage.filter({ course_id: courseId }, 'created_date'),
+  const { data: conversations = [] } = useQuery({
+    queryKey: ['conversations', courseId],
+    queryFn: () => listCourseConversations(courseId),
     enabled: !!courseId
   });
 
-  const { data: courseContent = [] } = useQuery({
-    queryKey: ['courseContent', courseId],
-    queryFn: () => listCourseContents(courseId),
-    enabled: !!courseId
+  const { data: messages = [] } = useQuery({
+    queryKey: ['conversationMessages', conversationId],
+    queryFn: () => listConversationMessages(conversationId),
+    enabled: !!conversationId
   });
+
+  const activeConversationId = useMemo(() => (conversationId ? String(conversationId) : null), [conversationId]);
 
   const sendMessageMutation = useMutation({
     mutationFn: async (userMessage) => {
-      // Save user message
-      await client.entities.ChatMessage.create({
-        course_id: courseId,
-        role: "user",
-        content: userMessage
-      });
-
-      // Get assistant response (v0: backend stub, later: real LLM + citations).
-      const response = await client.integrations.Core.InvokeLLM({
+      const response = await sendCourseChat({
         courseId,
         message: userMessage,
-        conversationId: null,
+        conversationId: activeConversationId,
       });
 
-      // Save AI response
-      const assistantText = typeof response?.text === "string" ? response.text : String(response ?? "");
-      await client.entities.ChatMessage.create({
-        course_id: courseId,
-        role: "assistant",
-        content: assistantText
-      });
+      const newConversationId =
+        (typeof response?.conversationId === "string" && response.conversationId) ||
+        (typeof response?.conversation_id === "string" && response.conversation_id) ||
+        null;
+
+      // If this started a new conversation, reflect it in the URL so refresh/share works.
+      if (!activeConversationId && newConversationId) {
+        navigate(createPageUrl(`CourseChat?id=${courseId}&conversationId=${encodeURIComponent(newConversationId)}`), {
+          replace: true,
+        });
+      }
     },
     onMutate: () => {
       setIsTyping(true);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['messages', courseId] });
+      queryClient.invalidateQueries({ queryKey: ['conversations', courseId] });
+      queryClient.invalidateQueries({ queryKey: ['conversationMessages', conversationId] });
       setMessage("");
       setIsTyping(false);
     },
@@ -117,6 +118,17 @@ export default function CourseChat() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
+
+  const handleNewChat = () => {
+    setIsSidebarOpen(false);
+    navigate(createPageUrl(`CourseChat?id=${courseId}`));
+  };
+
+  const handleOpenConversation = (cid) => {
+    if (!cid) return;
+    setIsSidebarOpen(false);
+    navigate(createPageUrl(`CourseChat?id=${courseId}&conversationId=${encodeURIComponent(cid)}`));
+  };
 
   return (
     <div className="min-h-screen flex flex-col relative">
@@ -269,9 +281,9 @@ export default function CourseChat() {
                       <div className="space-y-2">
                         <Link
                           to={createPageUrl(`CourseChat?id=${courseId}`)}
-                          onClick={() => {
-                            setIsSidebarOpen(false);
-                            window.location.reload();
+                          onClick={(e) => {
+                            e.preventDefault();
+                            handleNewChat();
                           }}
                         >
                           <motion.button
@@ -282,14 +294,38 @@ export default function CourseChat() {
                             <span className="text-sm font-medium">New Chat</span>
                           </motion.button>
                         </Link>
-                        <motion.button
-                          whileHover={{ x: 4 }}
-                          className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-gray-300 hover:text-white hover:bg-white/5 transition-colors"
-                        >
-                          <History className="w-5 h-5 text-purple-400" />
-                          <span className="text-sm font-medium">Past Conversations</span>
-                          <span className="ml-auto text-xs text-gray-500">Coming Soon</span>
-                        </motion.button>
+                        <div className="space-y-1">
+                          <div className="px-4 pt-2 pb-1 text-[11px] text-gray-500 uppercase tracking-wider flex items-center gap-2">
+                            <History className="w-4 h-4 text-purple-400" />
+                            <span>Past Conversations</span>
+                          </div>
+                          {conversations.length === 0 ? (
+                            <div className="px-4 py-2 text-xs text-gray-500">
+                              No conversations yet.
+                            </div>
+                          ) : (
+                            conversations.slice(0, 20).map((c) => {
+                              const cid = c?.id;
+                              const isActive = activeConversationId && cid && String(cid) === String(activeConversationId);
+                              const label = c?.title || "Conversation";
+                              return (
+                                <motion.button
+                                  key={cid}
+                                  whileHover={{ x: 4 }}
+                                  onClick={() => handleOpenConversation(cid)}
+                                  className={`w-full flex items-center gap-3 px-4 py-2 rounded-xl text-left transition-colors ${
+                                    isActive
+                                      ? 'bg-purple-500/20 text-white border border-purple-500/30'
+                                      : 'text-gray-300 hover:text-white hover:bg-white/5'
+                                  }`}
+                                >
+                                  <History className="w-4 h-4 text-purple-400" />
+                                  <span className="text-sm font-medium truncate">{label}</span>
+                                </motion.button>
+                              );
+                            })
+                          )}
+                        </div>
                       </div>
                     </div>
 
