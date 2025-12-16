@@ -3,6 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 import boto3
+from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -88,6 +89,7 @@ async def delete_course_content(
     content_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
 ) -> Response:
     res = await db.execute(
         select(CourseContent, Course)
@@ -99,6 +101,29 @@ async def delete_course_content(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content not found")
 
     content: CourseContent = row[0]
+
+    # Best-effort storage cleanup: if there's an S3 object, delete it before deleting the DB row.
+    # If the object is already missing, treat as success. For other S3 errors, fail fast so
+    # callers can retry and we don't orphan storage.
+    if content.file_key:
+        if not settings.s3_bucket:
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="S3 is not configured (missing S3_BUCKET); cannot delete stored file",
+            )
+        s3 = _s3_client(settings)
+        try:
+            s3.delete_object(Bucket=settings.s3_bucket, Key=content.file_key)
+        except ClientError as e:
+            code = (e.response or {}).get("Error", {}).get("Code")
+            if code in {"NoSuchKey", "404", "NotFound"}:
+                pass
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Failed to delete file from S3",
+                ) from e
+
     await db.delete(content)
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
