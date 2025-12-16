@@ -25,6 +25,8 @@ export default function Navbar({ onMenuClick, showMenu = false, authVariant = "l
     retry: false,
   });
 
+  const userLabel = user?.display_name || user?.email || "";
+
   const handleLogout = () => {
     client.auth
       .logout()
@@ -60,12 +62,13 @@ export default function Navbar({ onMenuClick, showMenu = false, authVariant = "l
                   <div className="w-9 h-9 rounded-full bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center">
                     <User className="w-5 h-5 text-white" />
                   </div>
-                  <span className="text-sm font-medium hidden sm:block">{user.email}</span>
+                  <span className="text-sm font-medium hidden sm:block">{userLabel}</span>
                 </Button>
               </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48 bg-[#131313] border-white/10 text-white">
               <div className="px-2 py-2">
                 <p className="text-sm font-medium">Signed in</p>
+                {user?.display_name && <p className="text-xs text-gray-300">{user.display_name}</p>}
                 <p className="text-xs text-gray-400">{user.email}</p>
               </div>
               <DropdownMenuSeparator className="bg-white/10" />

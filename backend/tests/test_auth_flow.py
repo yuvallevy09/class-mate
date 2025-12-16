@@ -144,3 +144,59 @@ async def test_login_refresh_rotation_logout_flow() -> None:
 
         after_logout = await client.get("/api/v1/users/me")
         assert after_logout.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_signup_sets_cookies_and_returns_display_name() -> None:
+    settings = get_settings()
+
+    if not await _can_connect(settings.database_url):
+        pytest.skip(
+            "Database not reachable. Start Postgres and ensure DATABASE_URL is correct "
+            "(docker-compose.yml maps host 5433 -> container 5432)."
+        )
+
+    # Ensure schema exists.
+    await asyncio.to_thread(_run_migrations_sync)
+
+    email = f"test-signup-{uuid4()}@example.com"
+    password = "password123"
+    display_name = "John"
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        csrf = await client.get("/api/v1/auth/csrf")
+        assert csrf.status_code == 200
+        csrf_token = csrf.json()["csrfToken"]
+        assert csrf_token
+
+        # CSRF must be present for signup.
+        missing_csrf = await client.post(
+            "/api/v1/auth/signup",
+            json={"email": email, "password": password, "displayName": display_name},
+        )
+        assert missing_csrf.status_code == 403
+
+        resp = await client.post(
+            "/api/v1/auth/signup",
+            json={"email": email, "password": password, "displayName": display_name},
+            headers={settings.csrf_header_name: csrf_token},
+        )
+        assert resp.status_code == 200
+
+        set_cookie_headers = resp.headers.get_list("set-cookie")
+        assert any(settings.access_cookie_name in h for h in set_cookie_headers)
+        assert any(settings.refresh_cookie_name in h for h in set_cookie_headers)
+
+        me = await client.get("/api/v1/users/me")
+        assert me.status_code == 200
+        data = me.json()
+        assert data["email"] == email
+        assert data["display_name"] == display_name
+
+        dup = await client.post(
+            "/api/v1/auth/signup",
+            json={"email": email, "password": password, "displayName": display_name},
+            headers={settings.csrf_header_name: csrf_token},
+        )
+        assert dup.status_code == 409

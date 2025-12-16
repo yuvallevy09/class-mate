@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 
 class LoginRequest(BaseModel):
@@ -9,6 +9,16 @@ class LoginRequest(BaseModel):
 
 
 class LoginResponse(BaseModel):
+    ok: bool = True
+
+
+class SignupRequest(BaseModel):
+    email: EmailStr
+    password: str
+    display_name: str = Field(validation_alias="displayName")
+
+
+class SignupResponse(BaseModel):
     ok: bool = True
 
 

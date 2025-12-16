@@ -14,7 +14,7 @@ export default function Home() {
     retry: false,
   });
 
-  const firstName = user?.email?.split("@")[0] || "there";
+  const firstName = user?.display_name || user?.email?.split("@")[0] || "there";
 
   return (
     <div className="min-h-screen relative overflow-hidden">

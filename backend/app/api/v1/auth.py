@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +15,7 @@ from app.core.security import (
     create_csrf_token,
     create_access_token,
     create_refresh_token,
+    hash_password,
     hash_refresh_token,
     set_csrf_cookie,
     set_access_cookie,
@@ -24,7 +26,15 @@ from app.core.settings import Settings, get_settings
 from app.db.models.refresh_session import RefreshSession
 from app.db.models.user import User
 from app.db.session import get_db
-from app.schemas.auth import CsrfResponse, LoginRequest, LoginResponse, LogoutResponse, RefreshResponse
+from app.schemas.auth import (
+    CsrfResponse,
+    LoginRequest,
+    LoginResponse,
+    LogoutResponse,
+    RefreshResponse,
+    SignupRequest,
+    SignupResponse,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -73,6 +83,66 @@ async def login(
     )
     await db.commit()
 
+    set_access_cookie(response=response, token=access_token, settings=settings)
+    set_refresh_cookie(response=response, token=refresh_token, settings=settings)
+    return response
+
+
+@router.post("/signup", response_model=SignupResponse)
+async def signup(
+    body: SignupRequest,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    email = body.email.lower().strip()
+    display_name = (body.display_name or "").strip()
+
+    if not display_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Name is required")
+    if len(display_name) > 120:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Name is too long")
+    if len(body.password or "") < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 8 characters",
+        )
+
+    # Fast path: pre-check email uniqueness for a clean 409; still handle race via IntegrityError.
+    res = await db.execute(select(User).where(User.email == email))
+    if res.scalar_one_or_none() is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
+
+    user = User(email=email, hashed_password=hash_password(body.password), display_name=display_name)
+    db.add(user)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
+    await db.refresh(user)
+
+    access_token = create_access_token(
+        subject=str(user.id),
+        ttl_seconds=settings.jwt_access_ttl_seconds,
+        secret=settings.jwt_secret,
+    )
+
+    # Refresh session (opaque token stored as cookie, hashed in DB).
+    now = datetime.now(timezone.utc)
+    refresh_token = create_refresh_token()
+    refresh_token_hash = hash_refresh_token(refresh_token, settings.jwt_secret)
+    refresh_expires_at = now + timedelta(seconds=int(settings.jwt_refresh_ttl_seconds))
+
+    db.add(
+        RefreshSession(
+            user_id=user.id,
+            token_hash=refresh_token_hash,
+            expires_at=refresh_expires_at,
+        )
+    )
+    await db.commit()
+
+    response = JSONResponse(SignupResponse(ok=True).model_dump())
     set_access_cookie(response=response, token=access_token, settings=settings)
     set_refresh_cookie(response=response, token=refresh_token, settings=settings)
     return response

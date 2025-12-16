@@ -10,5 +10,6 @@ class UserPublic(BaseModel):
 
     id: int
     email: EmailStr
+    display_name: str | None = None
     is_active: bool
     created_at: datetime
