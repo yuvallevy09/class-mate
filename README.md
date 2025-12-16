@@ -1,44 +1,169 @@
 # ClassMate
 
-Monorepo layout with separate frontend and backend.
+ClassMate is a learning companion that helps students organize academic materials and get context-aware help exactly where they need it.
 
-## Structure
+Users can create courses, upload and manage lecture slides/PDFs/other resources, and interact with an AI assistant that is scoped to a specific course. Instead of a generic chatbot, ClassMate is designed to understand your materials—enabling questions like:
 
-- `frontend/`: Vite + React app
-- `backend/`: FastAPI (async) API
+- “Where did we cover matrix multiplication?”
+- “Based on previous exams, can you come up with new exam questions for me to practice?”
 
-## Run (frontend)
+---
 
-```bash
-cd frontend
-npm install
-npm run dev
-```
+## What’s implemented so far
 
-### Frontend env
+### Core product features
 
-- Copy `frontend/env.example` to `frontend/.env.local` (or `frontend/.env`) and set `VITE_API_URL` to your API origin (e.g. `http://localhost:3001`).
+- **Authentication (cookie-based)**: signup/login/logout with session refresh.
+- **Course management**: create/list/view/delete courses (per-user ownership enforced).
+- **Course content library**:
+  - Create/list/delete content items per course and category (notes, exams, media, etc.).
+  - Optional file attachment metadata stored alongside content.
+- **File uploads (S3-compatible, presigned URLs)**:
+  - Backend issues **presigned PUT** URLs; browser uploads directly to object storage.
+  - Backend can generate **presigned download** links for attached files.
+- **Course chat (API contract wired end-to-end)**:
+  - Frontend sends messages to a course-scoped chat endpoint.
+  - Current backend response is a **deterministic stub** to keep the contract stable while LLM/RAG is implemented.
 
-## Run (backend)
+### Security & privacy baseline
+
+- **Ownership guarantees**: all course/content APIs verify the authenticated user owns the target course/content.
+- **Cookie auth + CSRF protection**:
+  - HTTP-only access/refresh cookies.
+  - CSRF middleware (double-submit cookie) requiring `X-CSRF-Token` for unsafe methods.
+- **CORS configured for cookie auth**: origins are explicit and `allow_credentials=true` is enabled.
+
+---
+
+## Architecture
+
+This repo uses a simple monorepo layout with two apps:
+
+- **`frontend/`** — Vite + React SPA
+  - React Router for pages
+  - TanStack React Query for server state
+  - TailwindCSS + shadcn/ui for UI components
+- **`backend/`** — Async FastAPI API
+  - SQLAlchemy (async) + Alembic migrations
+  - Postgres for persistence
+  - S3-compatible object storage (MinIO in local dev) for uploads
+
+### Request flow (high level)
+
+1. Frontend boots and fetches a CSRF cookie (`GET /api/v1/auth/csrf`).
+2. Authenticated requests are cookie-based (`credentials: "include"`).
+3. Unsafe requests (POST/PUT/PATCH/DELETE) include `X-CSRF-Token`.
+4. The frontend has a conservative refresh-on-401 retry for non-auth endpoints.
+
+---
+
+## Local development
+
+### Prerequisites
+
+- **Node.js** (for the frontend)
+- **Python 3.12+** recommended (for the backend)
+- **uv** (Python package manager)
+- **Docker** (recommended for local Postgres + MinIO)
+
+### 1) Backend setup
 
 ```bash
 cd backend
 cp env.example .env
 uv sync
+```
+
+Start Postgres + MinIO:
+
+```bash
+cd backend
+docker compose up -d
+```
+
+Run migrations:
+
+```bash
+cd backend
+uv run alembic upgrade head
+```
+
+Start the API (default port **3001**):
+
+```bash
+cd backend
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port ${PORT:-3001}
 ```
 
-## Root scripts (optional)
+Health checks:
+
+- `GET /health`
+- `GET /health/db`
+
+### 2) Frontend setup
+
+```bash
+cd frontend
+npm install
+```
+
+Configure env:
+
+- Copy `frontend/env.example` to `frontend/.env.local` (or `frontend/.env`)
+- Set:
+  - `VITE_API_URL=http://localhost:3001`
+  - `VITE_CHAT_ENABLED=true` (enables the UI’s send button; backend chat is currently stubbed)
+
+Start the frontend (Vite default port **5173**):
+
+```bash
+cd frontend
+npm run dev
+```
+
+### 3) Convenience scripts (from repo root)
 
 ```bash
 npm run dev:frontend
 npm run dev:backend
 ```
 
-## Build (frontend)
+---
+
+## Configuration notes (dev)
+
+- **CORS**: set `CORS_ORIGINS` in `backend/.env` to the exact Vite origin (e.g. `http://localhost:5173`).
+- **Host consistency**: prefer `localhost` everywhere (don’t mix `localhost` and `127.0.0.1`) or cookie auth can break.
+- **MinIO/S3**:
+  - MinIO S3 API: `http://localhost:9000`
+  - MinIO console: `http://localhost:9001`
+  - Bucket is created automatically as `classmate` by `minio-init` in `backend/docker-compose.yml`.
+
+---
+
+## Tests
+
+Backend tests live in `backend/tests/` and cover core flows (auth, courses, chat contract, migrations, validation guards).
 
 ```bash
-cd frontend
-npm run build
-npm run preview
+cd backend
+uv run pytest
 ```
+
+---
+
+## Roadmap (planned)
+
+- **LLM + RAG**: ground answers in uploaded course content with citations.
+- **Conversation persistence**: store chat threads/messages server-side (not just local storage).
+- **Richer course material understanding**: lecture segmentation, timestamped references, metadata extraction.
+- **Multilingual support** and improved search/discovery across content.
+
+---
+
+## Project structure (quick map)
+
+- `frontend/` — React app (pages in `frontend/src/pages/`, API client in `frontend/src/api/`)
+- `backend/` — FastAPI app (routes in `backend/app/api/v1/`, models in `backend/app/db/models/`, migrations in `backend/alembic/`)
+
+For backend-specific notes (DB, Docker, seeding users), see `backend/README.md`.
