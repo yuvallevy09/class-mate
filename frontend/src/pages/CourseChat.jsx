@@ -28,7 +28,10 @@ const SIDEBAR_ITEMS = [
 export default function CourseChat() {
   const urlParams = new URLSearchParams(window.location.search);
   const courseId = urlParams.get("id");
-  const chatEnabled = false;
+  const chatEnabled =
+    String(import.meta.env.VITE_CHAT_ENABLED ?? "")
+      .trim()
+      .toLowerCase() === "true";  
   
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [message, setMessage] = useState("");
@@ -68,31 +71,19 @@ export default function CourseChat() {
         content: userMessage
       });
 
-      // Build context from course content
-      const contentContext = courseContent.map(c => 
-        `[${c.category}] ${c.title}: ${c.description || ''}`
-      ).join('\n');
-
-      // Get AI response
+      // Get assistant response (v0: backend stub, later: real LLM + citations).
       const response = await client.integrations.Core.InvokeLLM({
-        prompt: `You are a helpful teaching assistant for the course "${course?.name}". 
-        
-Course Description: ${course?.description || 'Not provided'}
-Instructor: ${course?.instructor || 'Not provided'}
-
-Available Course Materials:
-${contentContext || 'No materials uploaded yet.'}
-
-Student Question: ${userMessage}
-
-Provide a helpful, educational response based on the course context. Be encouraging and thorough.`,
+        courseId,
+        message: userMessage,
+        conversationId: null,
       });
 
       // Save AI response
+      const assistantText = typeof response?.text === "string" ? response.text : String(response ?? "");
       await client.entities.ChatMessage.create({
         course_id: courseId,
         role: "assistant",
-        content: response
+        content: assistantText
       });
     },
     onMutate: () => {

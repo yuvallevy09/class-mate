@@ -1,6 +1,7 @@
 import * as realAuth from "./auth";
 import * as realCourses from "./courses";
 import * as realCourseContents from "./courseContents";
+import { request } from "./http";
 
 const DB_KEY = "classmate_db_v1";
 
@@ -170,8 +171,17 @@ export const client = {
         const file_url = URL.createObjectURL(file);
         return { file_url };
       },
-      async InvokeLLM() {
-        throw new Error("LLM/chat endpoint is not implemented yet.");
+      async InvokeLLM({ courseId, message, conversationId } = {}) {
+        if (!courseId) throw new Error("courseId is required");
+        if (!message || !String(message).trim()) throw new Error("message is required");
+
+        return request(`/api/v1/courses/${encodeURIComponent(courseId)}/chat`, {
+          method: "POST",
+          body: {
+            message: String(message),
+            conversationId: conversationId ?? null,
+          },
+        });
       },
     },
   },
