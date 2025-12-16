@@ -65,13 +65,20 @@ async def create_course_content(
     body: CourseContentCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
 ) -> CourseContent:
     await _get_owned_course(db, course_id=course_id, user_id=current_user.id)
+
+    if body.file_key and not settings.s3_bucket:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="S3 is not configured (missing S3_BUCKET); cannot attach file to content",
+        )
 
     content = CourseContent(
         course_id=course_id,
         category=body.category,
-        title=body.title.strip(),
+        title=body.title,
         description=body.description,
         file_key=body.file_key,
         original_filename=body.original_filename,

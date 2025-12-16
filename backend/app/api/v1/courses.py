@@ -36,7 +36,7 @@ async def create_course(
 ) -> Course:
     course = Course(
         user_id=current_user.id,
-        name=body.name.strip(),
+        name=body.name,
         description=body.description,
     )
     db.add(course)
