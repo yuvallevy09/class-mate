@@ -30,6 +30,14 @@ export async function logout() {
   });
 }
 
+export async function deleteMe() {
+  await ensureCsrf();
+  return request("/api/v1/users/me", {
+    method: "DELETE",
+    _skipRefresh: true,
+  });
+}
+
 export async function refresh() {
   await ensureCsrf();
   return request("/api/v1/auth/refresh", {

@@ -200,3 +200,56 @@ async def test_signup_sets_cookies_and_returns_display_name() -> None:
             headers={settings.csrf_header_name: csrf_token},
         )
         assert dup.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_delete_me_deletes_account_and_logs_out() -> None:
+    settings = get_settings()
+
+    if not await _can_connect(settings.database_url):
+        pytest.skip(
+            "Database not reachable. Start Postgres and ensure DATABASE_URL is correct "
+            "(docker-compose.yml maps host 5433 -> container 5432)."
+        )
+
+    # Ensure schema exists.
+    await asyncio.to_thread(_run_migrations_sync)
+
+    email = f"test-delete-{uuid4()}@example.com"
+    password = "password123"
+    display_name = "John"
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        csrf = await client.get("/api/v1/auth/csrf")
+        assert csrf.status_code == 200
+        csrf_token = csrf.json()["csrfToken"]
+        assert csrf_token
+
+        signup = await client.post(
+            "/api/v1/auth/signup",
+            json={"email": email, "password": password, "displayName": display_name},
+            headers={settings.csrf_header_name: csrf_token},
+        )
+        assert signup.status_code == 200
+
+        me = await client.get("/api/v1/users/me")
+        assert me.status_code == 200
+
+        missing_csrf_delete = await client.delete("/api/v1/users/me")
+        assert missing_csrf_delete.status_code == 403
+
+        deleted = await client.delete(
+            "/api/v1/users/me",
+            headers={settings.csrf_header_name: csrf_token},
+        )
+        assert deleted.status_code in (200, 204)
+
+        after = await client.get("/api/v1/users/me")
+        assert after.status_code == 401
+
+        refresh = await client.post(
+            "/api/v1/auth/refresh",
+            headers={settings.csrf_header_name: csrf_token},
+        )
+        assert refresh.status_code == 401

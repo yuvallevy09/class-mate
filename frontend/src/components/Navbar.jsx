@@ -5,6 +5,7 @@ import { client } from "@/api/client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { BookOpen, User, LogOut, Menu } from "lucide-react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -13,11 +14,24 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { toast } from "@/components/ui/use-toast";
 
 export default function Navbar({ onMenuClick, showMenu = false, authVariant = "login" }) {
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const { data: user } = useQuery({
     queryKey: ["currentUser"],
@@ -37,6 +51,25 @@ export default function Navbar({ onMenuClick, showMenu = false, authVariant = "l
         queryClient.invalidateQueries({ queryKey: ["currentUser"] });
         navigate("/");
       });
+  };
+
+  const handleDeleteAccount = async () => {
+    setIsDeleting(true);
+    try {
+      await client.auth.deleteMe();
+      await queryClient.invalidateQueries({ queryKey: ["currentUser"] });
+      toast({ title: "Account deleted", description: "Your account and data were permanently deleted." });
+      navigate("/");
+    } catch (e) {
+      const msg =
+        e?.data?.detail ||
+        (typeof e?.message === "string" ? e.message : null) ||
+        "Failed to delete account";
+      toast({ title: "Couldn’t delete account", description: msg });
+    } finally {
+      setIsDeleting(false);
+      setDeleteOpen(false);
+    }
   };
 
   return (
@@ -72,6 +105,15 @@ export default function Navbar({ onMenuClick, showMenu = false, authVariant = "l
                 <p className="text-xs text-gray-400">{user.email}</p>
               </div>
               <DropdownMenuSeparator className="bg-white/10" />
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  setDeleteOpen(true);
+                }}
+                className="cursor-pointer text-red-400 focus:text-red-400 focus:bg-red-500/10"
+              >
+                Delete account
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={handleLogout} className="cursor-pointer text-red-400 focus:text-red-400 focus:bg-red-500/10">
                 <LogOut className="w-4 h-4 mr-2" />
                 Logout
@@ -101,6 +143,32 @@ export default function Navbar({ onMenuClick, showMenu = false, authVariant = "l
           )}
         </div>
       </div>
+
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialogContent className="bg-[#131313] border-white/10 text-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete account?</AlertDialogTitle>
+            <AlertDialogDescription className="text-gray-400">
+              This permanently deletes your account and all your courses and materials. This action can’t be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting} className="border-white/10 bg-white/5 text-white hover:bg-white/10">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isDeleting}
+              onClick={(e) => {
+                e.preventDefault();
+                handleDeleteAccount();
+              }}
+              className="bg-red-500 hover:bg-red-600"
+            >
+              {isDeleting ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </nav>
   );
 }

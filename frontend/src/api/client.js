@@ -69,6 +69,9 @@ export const client = {
     async logout() {
       return realAuth.logout();
     },
+    async deleteMe() {
+      return realAuth.deleteMe();
+    },
   },
 
   entities: {
