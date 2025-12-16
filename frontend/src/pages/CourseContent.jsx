@@ -2,10 +2,12 @@ import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { client } from "@/api/client";
+import { listCourseContents, createCourseContent, deleteCourseContent, getDownloadUrl } from "@/api/courseContents";
+import { presignUpload } from "@/api/uploads";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
-  Plus, FileText, Image, Video, File, Menu, X as CloseIcon,
+  Plus, FileText, Image, Video, File, X as CloseIcon,
   Trash2, Upload, X, BookOpen, Loader2, Search
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -67,32 +69,43 @@ export default function CourseContent() {
 
   const { data: content = [], isLoading } = useQuery({
     queryKey: ['content', courseId, category],
-    queryFn: () => client.entities.CourseContent.filter({ 
-      course_id: courseId, 
-      category: category 
-    }, '-created_date'),
+    queryFn: () => listCourseContents(courseId, { category }),
     enabled: !!courseId && !!category
   });
 
   const createContentMutation = useMutation({
     mutationFn: async (contentData) => {
-      let fileUrl = null;
-      let fileType = null;
-
       if (contentData.file) {
         setIsUploading(true);
-        const result = await client.integrations.Core.UploadFile({ file: contentData.file });
-        fileUrl = result.file_url;
-        fileType = contentData.file.type.split('/')[0];
+        const presign = await presignUpload({ courseId, file: contentData.file });
+        const putRes = await fetch(presign.uploadUrl, {
+          method: presign.method || "PUT",
+          headers: {
+            "Content-Type": contentData.file.type || "application/octet-stream",
+          },
+          body: contentData.file,
+        });
+        if (!putRes.ok) {
+          const text = await putRes.text().catch(() => "");
+          throw new Error(`Upload failed (${putRes.status}): ${text}`);
+        }
+
+        await createCourseContent(courseId, {
+          category,
+          title: contentData.title,
+          description: contentData.description,
+          file_key: presign.key,
+          original_filename: contentData.file.name,
+          mime_type: contentData.file.type || "application/octet-stream",
+          size_bytes: contentData.file.size ?? null,
+        });
+        return;
       }
 
-      await client.entities.CourseContent.create({
-        course_id: courseId,
-        category: category,
+      await createCourseContent(courseId, {
+        category,
         title: contentData.title,
         description: contentData.description,
-        file_url: fileUrl,
-        file_type: fileType
       });
     },
     onSuccess: () => {
@@ -107,7 +120,7 @@ export default function CourseContent() {
   });
 
   const deleteContentMutation = useMutation({
-    mutationFn: (contentId) => client.entities.CourseContent.delete(contentId),
+    mutationFn: (contentId) => deleteCourseContent(contentId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['content', courseId, category] });
     }
@@ -125,12 +138,22 @@ export default function CourseContent() {
     }
   };
 
-  const getFileIcon = (fileType) => {
-    if (!fileType) return FILE_ICONS.default;
-    if (fileType.includes('pdf')) return FILE_ICONS.pdf;
-    if (fileType.includes('image')) return FILE_ICONS.image;
-    if (fileType.includes('video')) return FILE_ICONS.video;
+  const getFileIcon = (mimeType) => {
+    const mt = (mimeType || "").toLowerCase();
+    if (!mt) return FILE_ICONS.default;
+    if (mt === "application/pdf" || mt.endsWith("/pdf")) return FILE_ICONS.pdf;
+    if (mt.startsWith("image/")) return FILE_ICONS.image;
+    if (mt.startsWith("video/")) return FILE_ICONS.video;
     return FILE_ICONS.default;
+  };
+
+  const handleViewFile = async (item) => {
+    try {
+      const res = await getDownloadUrl(item.id);
+      if (res?.url) window.open(res.url, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   const filteredContent = content.filter(item =>
@@ -220,7 +243,7 @@ export default function CourseContent() {
             >
               <AnimatePresence>
                 {filteredContent.map((item, index) => {
-                  const IconComponent = getFileIcon(item.file_type);
+                  const IconComponent = getFileIcon(item.mime_type);
                   return (
                     <motion.div
                       key={item.id}
@@ -252,16 +275,15 @@ export default function CourseContent() {
                         </p>
                       )}
                       
-                      {item.file_url && (
-                        <a
-                          href={item.file_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                      {item.file_key && (
+                        <button
+                          type="button"
+                          onClick={() => handleViewFile(item)}
                           className="inline-flex items-center gap-2 text-sm text-purple-400 hover:text-purple-300 transition-colors"
                         >
                           <File className="w-4 h-4" />
                           View File
-                        </a>
+                        </button>
                       )}
                     </motion.div>
                   );

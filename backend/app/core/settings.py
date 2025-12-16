@@ -22,6 +22,16 @@ class Settings(BaseSettings):
         validation_alias="DATABASE_URL",
     )
 
+    # S3 uploads (presigned)
+    s3_endpoint_url: str | None = Field(default=None, validation_alias="S3_ENDPOINT_URL")
+    s3_region: str = Field(default="us-east-1", validation_alias="S3_REGION")
+    s3_bucket: str | None = Field(default=None, validation_alias="S3_BUCKET")
+    s3_access_key_id: str | None = Field(default=None, validation_alias="S3_ACCESS_KEY_ID")
+    s3_secret_access_key: str | None = Field(default=None, validation_alias="S3_SECRET_ACCESS_KEY")
+    s3_presign_expires_seconds: int = Field(default=900, validation_alias="S3_PRESIGN_EXPIRES_SECONDS")
+    s3_download_expires_seconds: int = Field(default=300, validation_alias="S3_DOWNLOAD_EXPIRES_SECONDS")
+    upload_max_size_bytes: int = Field(default=26214400, validation_alias="UPLOAD_MAX_SIZE_BYTES")
+
     # JWT / cookies
     jwt_secret: str = Field(default="dev-change-me", validation_alias="JWT_SECRET")
     jwt_access_ttl_seconds: int = Field(default=900, validation_alias="JWT_ACCESS_TTL_SECONDS")
@@ -64,6 +74,12 @@ class Settings(BaseSettings):
             raise ValueError("COOKIE_SECURE must be true when COOKIE_SAMESITE is 'none'")
         if self.csrf_cookie_samesite == "none" and not self.cookie_secure:
             raise ValueError("COOKIE_SECURE must be true when CSRF_COOKIE_SAMESITE is 'none'")
+        if self.s3_presign_expires_seconds <= 0:
+            raise ValueError("S3_PRESIGN_EXPIRES_SECONDS must be > 0")
+        if self.s3_download_expires_seconds <= 0:
+            raise ValueError("S3_DOWNLOAD_EXPIRES_SECONDS must be > 0")
+        if self.upload_max_size_bytes <= 0:
+            raise ValueError("UPLOAD_MAX_SIZE_BYTES must be > 0")
         return self
 
 

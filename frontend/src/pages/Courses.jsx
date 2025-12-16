@@ -4,7 +4,7 @@ import { createPageUrl } from "@/utils";
 import { client } from "@/api/client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, Plus, BookOpen, User, ChevronRight, Grid3x3, List } from "lucide-react";
+import { Search, Plus, BookOpen, ChevronRight, Grid3x3, List } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Button } from "@/components/ui/button";

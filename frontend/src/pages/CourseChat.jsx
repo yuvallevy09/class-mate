@@ -2,10 +2,11 @@ import React, { useState, useRef, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { client } from "@/api/client";
+import { listCourseContents } from "@/api/courseContents";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
-  Menu, X, Send, BookOpen, FileText, 
+  X, Send, BookOpen, FileText, 
   ClipboardList, FolderOpen, Sparkles, Loader2,
   Image, FileQuestion, PenTool, MessageSquarePlus, History, ChevronRight
 } from "lucide-react";
@@ -54,7 +55,7 @@ export default function CourseChat() {
 
   const { data: courseContent = [] } = useQuery({
     queryKey: ['courseContent', courseId],
-    queryFn: () => client.entities.CourseContent.filter({ course_id: courseId }),
+    queryFn: () => listCourseContents(courseId),
     enabled: !!courseId
   });
 

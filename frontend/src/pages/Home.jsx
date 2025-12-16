@@ -110,7 +110,7 @@ export default function Home() {
                 title: "Personalized",
                 description: "Learning tailored to your courses and style"
               }
-            ].map((feature, index) => (
+            ].map((feature, _index) => (
               <motion.div
                 key={feature.title}
                 whileHover={{ y: -5, scale: 1.02 }}
