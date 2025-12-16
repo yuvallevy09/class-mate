@@ -1,5 +1,6 @@
 import * as realAuth from "./auth";
 import * as realCourses from "./courses";
+import * as realCourseContents from "./courseContents";
 
 const DB_KEY = "classmate_db_v1";
 
@@ -14,15 +15,13 @@ function nowIso() {
 function loadDB() {
   try {
     const raw = localStorage.getItem(DB_KEY);
-    if (!raw) return { courses: [], contents: [], messages: [] };
+    if (!raw) return { messages: [] };
     const parsed = JSON.parse(raw);
     return {
-      courses: Array.isArray(parsed.courses) ? parsed.courses : [],
-      contents: Array.isArray(parsed.contents) ? parsed.contents : [],
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
     };
   } catch {
-    return { courses: [], contents: [], messages: [] };
+    return { messages: [] };
   }
 }
 
@@ -109,30 +108,35 @@ export const client = {
 
     CourseContent: {
       async filter(where, order) {
-        const db = loadDB();
-        const filtered = db.contents.filter((c) => matchesWhere(c, where));
+        const courseId = where?.course_id;
+        if (!courseId) return [];
+
+        const items = await realCourseContents.listCourseContents(courseId, { category: where?.category });
+        const normalized = (Array.isArray(items) ? items : []).map((c) => ({
+          ...c,
+          created_date: c.created_at,
+        }));
+        const filtered = normalized.filter((c) => matchesWhere(c, where));
         return sortByCreatedDate(filtered, order);
       },
       async create(data) {
-        const db = loadDB();
-        const item = {
-          id: uid(),
-          created_date: nowIso(),
-          course_id: data?.course_id,
+        const courseId = data?.course_id;
+        if (!courseId) throw new Error("course_id is required");
+
+        const created = await realCourseContents.createCourseContent(courseId, {
           category: data?.category,
           title: data?.title ?? "",
-          description: data?.description ?? "",
-          file_url: data?.file_url ?? null,
-          file_type: data?.file_type ?? null,
-        };
-        db.contents.push(item);
-        saveDB(db);
-        return item;
+          description: data?.description ?? null,
+          // Keep backend-compatible file fields (legacy UI fields are ignored by backend).
+          file_key: data?.file_key ?? null,
+          original_filename: data?.original_filename ?? null,
+          mime_type: data?.mime_type ?? null,
+          size_bytes: data?.size_bytes ?? null,
+        });
+        return { ...created, created_date: created?.created_at };
       },
       async delete(id) {
-        const db = loadDB();
-        db.contents = db.contents.filter((c) => c.id !== id);
-        saveDB(db);
+        await realCourseContents.deleteCourseContent(id);
         return { ok: true };
       },
     },
@@ -167,7 +171,7 @@ export const client = {
         return { file_url };
       },
       async InvokeLLM() {
-        throw new Error("LLM is disabled until backend is connected.");
+        throw new Error("LLM/chat endpoint is not implemented yet.");
       },
     },
   },

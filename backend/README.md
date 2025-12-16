@@ -31,11 +31,13 @@ uv run alembic upgrade head
 
 ## Seed a dev user (for login)
 
-This project currently has no signup endpoint. Create a dev user with:
+This project supports signup via `POST /api/v1/auth/signup` (and the frontend signup page).
+
+If you prefer seeding a dev user directly in the DB (useful for quick local testing), run:
 
 ```bash
 cd backend
-uv run python scripts/create_user.py --email you@example.com --password pw
+uv run python scripts/create_user.py --email you@example.com --password pw --display-name "Dev User"
 ```
 
 ## Run (dev)

@@ -15,6 +15,7 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description="Create a dev user in the database.")
     parser.add_argument("--email", required=True)
     parser.add_argument("--password", required=True)
+    parser.add_argument("--display-name", default=None)
     args = parser.parse_args()
 
     settings = get_settings()
@@ -29,7 +30,11 @@ async def main() -> None:
                 print(f"User already exists: id={existing.id} email={existing.email}")
                 return
 
-            user = User(email=args.email, hashed_password=hash_password(args.password))
+            user = User(
+                email=args.email,
+                hashed_password=hash_password(args.password),
+                display_name=(args.display_name.strip() if args.display_name else None),
+            )
             session.add(user)
             await session.commit()
             await session.refresh(user)

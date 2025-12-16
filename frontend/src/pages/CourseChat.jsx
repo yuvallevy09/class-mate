@@ -208,7 +208,7 @@ Provide a helpful, educational response based on the course context. Be encourag
             <div className="max-w-3xl mx-auto">
               {!chatEnabled && (
                 <div className="mb-3 text-xs text-gray-400">
-                  Chat is disabled until your backend is connected.
+                  Chat is disabled until the LLM/chat endpoint is implemented.
                 </div>
               )}
               <div className="glass-card rounded-2xl p-2 flex items-end gap-2">
