@@ -4,10 +4,20 @@ import { createPageUrl } from "@/utils";
 import { client } from "@/api/client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, Plus, BookOpen, ChevronRight, Grid3x3, List } from "lucide-react";
+import { Search, Plus, BookOpen, ChevronRight, Grid3x3, List, Trash2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -27,6 +37,8 @@ export default function Courses() {
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [viewMode, setViewMode] = useState("grid");
   const [newCourse, setNewCourse] = useState({ name: "", description: "" });
+  const [courseToDelete, setCourseToDelete] = useState(null);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   
   const queryClient = useQueryClient();
 
@@ -42,6 +54,15 @@ export default function Courses() {
       setIsAddDialogOpen(false);
       setNewCourse({ name: "", description: "" });
     }
+  });
+
+  const deleteCourseMutation = useMutation({
+    mutationFn: (courseId) => client.entities.Course.delete(courseId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["courses"] });
+      setIsDeleteDialogOpen(false);
+      setCourseToDelete(null);
+    },
   });
 
   const hashString = (s) => {
@@ -69,6 +90,13 @@ export default function Courses() {
     if (newCourse.name.trim()) {
       createCourseMutation.mutate(newCourse);
     }
+  };
+
+  const requestDeleteCourse = (e, course) => {
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+    setCourseToDelete(course);
+    setIsDeleteDialogOpen(true);
   };
 
   return (
@@ -181,7 +209,16 @@ export default function Courses() {
                     className="group"
                   >
                     <Link to={createPageUrl(`CourseChat?id=${course.id}`)}>
-                      <div className="glass-card rounded-2xl p-6 h-full cursor-pointer hover:border-purple-500/30 transition-all duration-300 hover:neon-glow">
+                      <div className="glass-card rounded-2xl p-6 h-full cursor-pointer hover:border-purple-500/30 transition-all duration-300 hover:neon-glow relative">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={(e) => requestDeleteCourse(e, course)}
+                          className="absolute top-4 right-4 opacity-70 hover:opacity-100 text-gray-300 hover:text-red-400 hover:bg-red-500/10"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
                         <div className={viewMode === "grid" ? "" : "flex items-start gap-4"}>
                           <div className={`${viewMode === "grid" ? "w-12 h-12 mb-5" : "w-12 h-12"} rounded-xl bg-gradient-to-br ${course.color || GRADIENT_COLORS[0]} flex items-center justify-center shrink-0`}>
                             <BookOpen className="w-6 h-6 text-white" />
@@ -210,6 +247,35 @@ export default function Courses() {
           )}
         </div>
       </main>
+
+      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <AlertDialogContent className="bg-[#131313] border-white/10 text-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete course?</AlertDialogTitle>
+            <AlertDialogDescription className="text-gray-400">
+              This will permanently delete <span className="text-white font-medium">{courseToDelete?.name}</span> and all its content and chat history.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              className="border-white/10 bg-white/5 text-white hover:bg-white/10"
+              onClick={() => setCourseToDelete(null)}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              onClick={(e) => {
+                e.preventDefault();
+                if (!courseToDelete?.id || deleteCourseMutation.isPending) return;
+                deleteCourseMutation.mutate(courseToDelete.id);
+              }}
+            >
+              {deleteCourseMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Add Course Dialog */}
       <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>

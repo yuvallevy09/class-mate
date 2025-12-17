@@ -30,7 +30,7 @@ export default function CourseChat() {
   
   const queryClient = useQueryClient();
 
-  const { data: course } = useQuery({
+  const { data: _course } = useQuery({
     queryKey: ['course', courseId],
     queryFn: async () => {
       const courses = await client.entities.Course.filter({ id: courseId });

@@ -109,3 +109,24 @@ async def list_messages(
         .order_by(ChatMessage.created_at.asc())
     )
     return list(msgs.scalars().all())
+
+
+@router.delete("/conversations/{conversation_id}")
+async def delete_conversation(
+    conversation_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    # Ownership: join conversations -> courses and ensure the current user owns the course.
+    res = await db.execute(
+        select(ChatConversation)
+        .join(Course, Course.id == ChatConversation.course_id)
+        .where(ChatConversation.id == conversation_id, Course.user_id == current_user.id)
+    )
+    conversation = res.scalar_one_or_none()
+    if conversation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+
+    await db.delete(conversation)
+    await db.commit()
+    return {"ok": True}

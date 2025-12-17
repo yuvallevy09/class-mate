@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   X,
@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 
 import { createPageUrl } from "@/utils";
-import { listCourseConversations } from "@/api/chat";
+import { deleteConversation, listCourseConversations } from "@/api/chat";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
@@ -40,6 +40,7 @@ export default function CourseSidebar({
 } = {}) {
   const navigate = useNavigate();
   const [isPastConversationsOpen, setIsPastConversationsOpen] = useState(false);
+  const queryClient = useQueryClient();
 
   const { data: conversations = [] } = useQuery({
     queryKey: ["conversations", courseId],
@@ -61,6 +62,26 @@ export default function CourseSidebar({
         `CourseChat?id=${courseId}&conversationId=${encodeURIComponent(conversationId)}`
       )
     );
+  };
+
+  const deleteConversationMutation = useMutation({
+    mutationFn: (conversationId) => deleteConversation(conversationId),
+    onSuccess: (_data, deletedId) => {
+      queryClient.invalidateQueries({ queryKey: ["conversations", courseId] });
+      queryClient.removeQueries({ queryKey: ["conversationMessages", String(deletedId)] });
+
+      // If the user deleted the active conversation, move them to a fresh chat.
+      if (activeConversationId && deletedId && String(activeConversationId) === String(deletedId)) {
+        navigate(createPageUrl(`CourseChat?id=${courseId}`), { replace: true });
+      }
+    },
+  });
+
+  const handleDeleteConversation = (e, conversationId) => {
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+    if (!conversationId || deleteConversationMutation.isPending) return;
+    deleteConversationMutation.mutate(conversationId);
   };
 
   return (
@@ -189,20 +210,32 @@ export default function CourseSidebar({
                               String(cid) === String(activeConversationId);
                             const label = c?.title || "Conversation";
                             return (
-                              <motion.button
+                              <motion.div
                                 key={cid}
                                 whileHover={{ x: 4 }}
-                                onClick={() => handleOpenConversation(cid)}
-                                className={`w-full flex items-center gap-3 px-4 py-2 rounded-xl text-left transition-colors ${
+                                className={`w-full flex items-center gap-2 px-4 py-2 rounded-xl transition-colors group ${
                                   isActive
                                     ? "bg-purple-500/20 text-white border border-purple-500/30"
                                     : "text-gray-300 hover:text-white hover:bg-white/5"
                                 }`}
                               >
-                                <span className="text-sm font-medium truncate">
-                                  {label}
-                                </span>
-                              </motion.button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenConversation(cid)}
+                                  className="flex-1 text-left"
+                                >
+                                  <span className="text-sm font-medium truncate block">{label}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  aria-label="Delete conversation"
+                                  title="Delete conversation"
+                                  onClick={(e) => handleDeleteConversation(e, cid)}
+                                  className="opacity-0 group-hover:opacity-100 transition-opacity rounded-md p-1 text-gray-400 hover:text-red-400 hover:bg-red-500/10"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </motion.div>
                             );
                           })
                         )}

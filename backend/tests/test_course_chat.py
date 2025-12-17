@@ -136,6 +136,26 @@ async def test_course_chat_requires_csrf_and_auth_and_ownership_and_valid_messag
         assert isinstance(convos_body, list) and len(convos_body) == 1
         assert convos_body[0]["id"] == convo_id
 
+        # Deleting a conversation requires CSRF.
+        missing_csrf_delete = await c1.delete(f"/api/v1/conversations/{convo_id}")
+        assert missing_csrf_delete.status_code == 403
+
+        deleted = await c1.delete(
+            f"/api/v1/conversations/{convo_id}",
+            headers={settings.csrf_header_name: token},
+        )
+        assert deleted.status_code == 200
+        assert deleted.json() == {"ok": True}
+
+        # Messages should be gone (hidden as 404).
+        msgs_after_delete = await c1.get(f"/api/v1/conversations/{convo_id}/messages")
+        assert msgs_after_delete.status_code == 404
+
+        # Conversation should disappear from course list.
+        convos_after_delete = await c1.get(f"/api/v1/courses/{course1_id}/conversations")
+        assert convos_after_delete.status_code == 200
+        assert convos_after_delete.json() == []
+
         # Empty/whitespace message should be rejected by request validation.
         empty = await c1.post(
             f"/api/v1/courses/{course1_id}/chat",

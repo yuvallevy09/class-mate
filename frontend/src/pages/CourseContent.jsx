@@ -1,22 +1,21 @@
 import React, { useState } from "react";
-import { createPageUrl } from "@/utils";
 import { client } from "@/api/client";
 import { listCourseContents, createCourseContent, deleteCourseContent, getDownloadUrl } from "@/api/courseContents";
 import { presignUpload } from "@/api/uploads";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { 
-  Plus, FileText, Image, Video, File, X as CloseIcon,
-  Trash2, Upload, X, BookOpen, Loader2, Search
+  Plus, FileText, Image, Video, File,
+  Trash2, Upload, X, BookOpen, Loader2, Search, Grid3x3, List
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import Navbar from "@/components/Navbar";
-import CourseSidebar, { COURSE_SIDEBAR_ITEMS } from "@/components/CourseSidebar";
+import CourseSidebar from "@/components/CourseSidebar";
 
 const CATEGORY_LABELS = {
   overview: "Overview",
@@ -27,8 +26,6 @@ const CATEGORY_LABELS = {
   additional_resources: "Additional Resources",
   general: "General"
 };
-
-const SIDEBAR_ITEMS = COURSE_SIDEBAR_ITEMS;
 
 const FILE_ICONS = {
   pdf: FileText,
@@ -46,6 +43,7 @@ export default function CourseContent() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [viewMode, setViewMode] = useState("grid");
   const [newContent, setNewContent] = useState({ title: "", description: "", file: null });
   
   const queryClient = useQueryClient();
@@ -186,8 +184,8 @@ export default function CourseContent() {
           </div>
 
           {/* Search Bar */}
-          <div className="mb-8">
-            <div className="relative max-w-md w-full">
+          <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between mb-8">
+            <div className="relative flex-1 max-w-md w-full">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500" />
               <Input
                 placeholder="Search content..."
@@ -196,15 +194,35 @@ export default function CourseContent() {
                 className="pl-12 h-12 bg-white/5 border-white/10 rounded-xl text-white placeholder:text-gray-500 focus:border-purple-500/50 focus:ring-purple-500/20 w-full"
               />
             </div>
+            <ToggleGroup type="single" value={viewMode} onValueChange={(value) => value && setViewMode(value)}>
+              <ToggleGroupItem 
+                value="grid" 
+                className="data-[state=on]:bg-purple-500/20 data-[state=on]:text-white border border-white/10 hover:bg-white/5"
+              >
+                <Grid3x3 className="w-4 h-4 mr-2" />
+                Grid
+              </ToggleGroupItem>
+              <ToggleGroupItem 
+                value="list"
+                className="data-[state=on]:bg-purple-500/20 data-[state=on]:text-white border border-white/10 hover:bg-white/5"
+              >
+                <List className="w-4 h-4 mr-2" />
+                List
+              </ToggleGroupItem>
+            </ToggleGroup>
           </div>
 
           {isLoading ? (
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className={viewMode === "grid" ? "grid md:grid-cols-2 lg:grid-cols-3 gap-6" : "space-y-4"}>
               {[1, 2, 3].map(i => (
                 <div key={i} className="glass-card rounded-2xl p-6 animate-pulse">
-                  <div className="w-12 h-12 rounded-xl bg-white/10 mb-5" />
-                  <div className="h-5 bg-white/10 rounded mb-3 w-3/4" />
-                  <div className="h-4 bg-white/5 rounded w-full" />
+                  <div className={viewMode === "grid" ? "" : "flex items-start gap-4"}>
+                    <div className={`${viewMode === "grid" ? "w-12 h-12 mb-5" : "w-12 h-12"} rounded-xl bg-white/10 shrink-0`} />
+                    <div className="flex-1">
+                      <div className="h-5 bg-white/10 rounded mb-3 w-3/4" />
+                      <div className="h-4 bg-white/5 rounded w-full" />
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>
@@ -231,7 +249,7 @@ export default function CourseContent() {
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="grid md:grid-cols-2 lg:grid-cols-3 gap-6"
+              className={viewMode === "grid" ? "grid md:grid-cols-2 lg:grid-cols-3 gap-6" : "space-y-4"}
             >
               <AnimatePresence>
                 {filteredContent.map((item, index) => {
@@ -255,28 +273,32 @@ export default function CourseContent() {
                         <Trash2 className="w-4 h-4" />
                       </Button>
                       
-                      <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-pink-500/20 via-purple-500/20 to-blue-500/20 flex items-center justify-center mb-5">
-                        <IconComponent className="w-6 h-6 text-purple-400" />
+                      <div className={viewMode === "grid" ? "" : "flex items-start gap-4"}>
+                        <div className={`${viewMode === "grid" ? "w-12 h-12 mb-5" : "w-12 h-12"} rounded-xl bg-gradient-to-br from-pink-500/20 via-purple-500/20 to-blue-500/20 flex items-center justify-center shrink-0`}>
+                          <IconComponent className="w-6 h-6 text-purple-400" />
+                        </div>
+                        
+                        <div className="flex-1">
+                          <h3 className="font-semibold mb-2 pr-8">{item.title}</h3>
+                          
+                          {item.description && (
+                            <p className="text-sm text-gray-400 line-clamp-2 mb-4">
+                              {item.description}
+                            </p>
+                          )}
+                          
+                          {item.file_key && (
+                            <button
+                              type="button"
+                              onClick={() => handleViewFile(item)}
+                              className="inline-flex items-center gap-2 text-sm text-purple-400 hover:text-purple-300 transition-colors"
+                            >
+                              <File className="w-4 h-4" />
+                              View File
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      
-                      <h3 className="font-semibold mb-2 pr-8">{item.title}</h3>
-                      
-                      {item.description && (
-                        <p className="text-sm text-gray-400 line-clamp-2 mb-4">
-                          {item.description}
-                        </p>
-                      )}
-                      
-                      {item.file_key && (
-                        <button
-                          type="button"
-                          onClick={() => handleViewFile(item)}
-                          className="inline-flex items-center gap-2 text-sm text-purple-400 hover:text-purple-300 transition-colors"
-                        >
-                          <File className="w-4 h-4" />
-                          View File
-                        </button>
-                      )}
                     </motion.div>
                   );
                 })}

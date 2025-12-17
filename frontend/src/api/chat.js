@@ -19,4 +19,9 @@ export async function sendCourseChat({ courseId, message, conversationId = null 
   });
 }
 
+export async function deleteConversation(conversationId) {
+  if (!conversationId) throw new Error("conversationId is required");
+  return request(`/api/v1/conversations/${encodeURIComponent(conversationId)}`, { method: "DELETE" });
+}
+
 
