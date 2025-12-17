@@ -1,29 +1,16 @@
 import React, { useState, useRef, useEffect, useMemo } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { client } from "@/api/client";
-import { listCourseConversations, listConversationMessages, sendCourseChat } from "@/api/chat";
+import { listConversationMessages, sendCourseChat } from "@/api/chat";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-import {
-  X, Send, BookOpen, FileText,
-  ClipboardList, FolderOpen, Sparkles, Loader2,
-  Image, FileQuestion, PenTool, MessageSquarePlus, History, ChevronRight
-} from "lucide-react";
+import { Send, Sparkles, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import Navbar from "@/components/Navbar";
-
-const SIDEBAR_ITEMS = [
-  { id: "overview", label: "Overview", icon: BookOpen, type: "content" },
-  { id: "media", label: "Course Media", icon: Image, type: "content" },
-  { id: "notes", label: "Notes", icon: PenTool, type: "content" },
-  { id: "past_exams", label: "Past Exams", icon: FileQuestion, type: "content" },
-  { id: "past_assignments", label: "Past Assignments", icon: ClipboardList, type: "content" },
-  { id: "additional_resources", label: "Additional Resources", icon: FolderOpen, type: "content" },
-  { id: "general", label: "General", icon: FileText, type: "content" }
-];
+import CourseSidebar from "@/components/CourseSidebar";
 
 export default function CourseChat() {
   const [searchParams] = useSearchParams();
@@ -49,12 +36,6 @@ export default function CourseChat() {
       const courses = await client.entities.Course.filter({ id: courseId });
       return courses[0];
     },
-    enabled: !!courseId
-  });
-
-  const { data: conversations = [] } = useQuery({
-    queryKey: ['conversations', courseId],
-    queryFn: () => listCourseConversations(courseId),
     enabled: !!courseId
   });
 
@@ -118,17 +99,6 @@ export default function CourseChat() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
-
-  const handleNewChat = () => {
-    setIsSidebarOpen(false);
-    navigate(createPageUrl(`CourseChat?id=${courseId}`));
-  };
-
-  const handleOpenConversation = (cid) => {
-    if (!cid) return;
-    setIsSidebarOpen(false);
-    navigate(createPageUrl(`CourseChat?id=${courseId}&conversationId=${encodeURIComponent(cid)}`));
-  };
 
   return (
     <div className="min-h-screen flex flex-col relative">
@@ -237,126 +207,12 @@ export default function CourseChat() {
           </div>
         </div>
 
-        {/* Sidebar */}
-        <AnimatePresence>
-          {isSidebarOpen && (
-            <>
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="fixed inset-0 bg-black/50 z-30 lg:hidden"
-                onClick={() => setIsSidebarOpen(false)}
-              />
-              <motion.aside
-                initial={{ x: '100%' }}
-                animate={{ x: 0 }}
-                exit={{ x: '100%' }}
-                transition={{ type: "spring", damping: 25, stiffness: 300 }}
-                className="fixed right-0 top-[73px] bottom-0 w-80 glass-card border-l border-white/5 z-40 lg:relative lg:top-0 lg:z-10"
-              >
-                <div className="p-6 border-b border-white/5 flex items-center justify-between">
-                  <Link to={createPageUrl("Courses")} onClick={() => setIsSidebarOpen(false)}>
-                    <Button variant="ghost" className="text-gray-400 hover:text-white hover:bg-white/5 px-3">
-                      <ChevronRight className="w-4 h-4 mr-2 rotate-180" />
-                      My Courses
-                    </Button>
-                  </Link>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => setIsSidebarOpen(false)}
-                    className="text-gray-400 hover:text-white hover:bg-white/5 lg:hidden"
-                  >
-                    <X className="w-5 h-5" />
-                  </Button>
-                </div>
-                <ScrollArea className="h-[calc(100%-73px)]">
-                  <div className="p-4 space-y-6">
-                    {/* Chat Section */}
-                    <div>
-                      <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 px-2">
-                        Chat
-                      </h3>
-                      <div className="space-y-2">
-                        <Link
-                          to={createPageUrl(`CourseChat?id=${courseId}`)}
-                          onClick={(e) => {
-                            e.preventDefault();
-                            handleNewChat();
-                          }}
-                        >
-                          <motion.button
-                            whileHover={{ x: 4 }}
-                            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-gray-300 hover:text-white hover:bg-white/5 transition-colors"
-                          >
-                            <MessageSquarePlus className="w-5 h-5 text-purple-400" />
-                            <span className="text-sm font-medium">New Chat</span>
-                          </motion.button>
-                        </Link>
-                        <div className="space-y-1">
-                          <div className="px-4 pt-2 pb-1 text-[11px] text-gray-500 uppercase tracking-wider flex items-center gap-2">
-                            <History className="w-4 h-4 text-purple-400" />
-                            <span>Past Conversations</span>
-                          </div>
-                          {conversations.length === 0 ? (
-                            <div className="px-4 py-2 text-xs text-gray-500">
-                              No conversations yet.
-                            </div>
-                          ) : (
-                            conversations.slice(0, 20).map((c) => {
-                              const cid = c?.id;
-                              const isActive = activeConversationId && cid && String(cid) === String(activeConversationId);
-                              const label = c?.title || "Conversation";
-                              return (
-                                <motion.button
-                                  key={cid}
-                                  whileHover={{ x: 4 }}
-                                  onClick={() => handleOpenConversation(cid)}
-                                  className={`w-full flex items-center gap-3 px-4 py-2 rounded-xl text-left transition-colors ${
-                                    isActive
-                                      ? 'bg-purple-500/20 text-white border border-purple-500/30'
-                                      : 'text-gray-300 hover:text-white hover:bg-white/5'
-                                  }`}
-                                >
-                                  <History className="w-4 h-4 text-purple-400" />
-                                  <span className="text-sm font-medium truncate">{label}</span>
-                                </motion.button>
-                              );
-                            })
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Course Content Section */}
-                    <div>
-                      <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 px-2">
-                        Course Content
-                      </h3>
-                      <div className="space-y-2">
-                        {SIDEBAR_ITEMS.map((item) => (
-                          <Link
-                            key={item.id}
-                            to={createPageUrl(`CourseContent?courseId=${courseId}&category=${item.id}`)}
-                          >
-                            <motion.button
-                              whileHover={{ x: 4 }}
-                              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-gray-300 hover:text-white hover:bg-white/5 transition-colors"
-                            >
-                              <item.icon className="w-5 h-5 text-purple-400" />
-                              <span className="text-sm font-medium">{item.label}</span>
-                            </motion.button>
-                          </Link>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </ScrollArea>
-              </motion.aside>
-            </>
-          )}
-        </AnimatePresence>
+        <CourseSidebar
+          courseId={courseId}
+          isOpen={isSidebarOpen}
+          onClose={() => setIsSidebarOpen(false)}
+          activeConversationId={activeConversationId}
+        />
       </div>
     </div>
   );

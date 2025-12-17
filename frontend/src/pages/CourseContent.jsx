@@ -1,11 +1,10 @@
 import React, { useState } from "react";
-import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { client } from "@/api/client";
 import { listCourseContents, createCourseContent, deleteCourseContent, getDownloadUrl } from "@/api/courseContents";
 import { presignUpload } from "@/api/uploads";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { 
   Plus, FileText, Image, Video, File, X as CloseIcon,
   Trash2, Upload, X, BookOpen, Loader2, Search
@@ -17,6 +16,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import Navbar from "@/components/Navbar";
+import CourseSidebar, { COURSE_SIDEBAR_ITEMS } from "@/components/CourseSidebar";
 
 const CATEGORY_LABELS = {
   overview: "Overview",
@@ -28,15 +28,7 @@ const CATEGORY_LABELS = {
   general: "General"
 };
 
-const SIDEBAR_ITEMS = [
-  { id: "overview", label: "Overview", icon: BookOpen },
-  { id: "media", label: "Course Media", icon: Image },
-  { id: "notes", label: "Notes", icon: FileText },
-  { id: "past_exams", label: "Past Exams", icon: FileText },
-  { id: "past_assignments", label: "Past Assignments", icon: FileText },
-  { id: "additional_resources", label: "Additional Resources", icon: FileText },
-  { id: "general", label: "General", icon: FileText }
-];
+const SIDEBAR_ITEMS = COURSE_SIDEBAR_ITEMS;
 
 const FILE_ICONS = {
   pdf: FileText,
@@ -375,104 +367,12 @@ export default function CourseContent() {
         </DialogContent>
       </Dialog>
 
-      {/* Sidebar */}
-      <AnimatePresence>
-        {isSidebarOpen && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 bg-black/50 z-30"
-              onClick={() => setIsSidebarOpen(false)}
-            />
-            <motion.aside
-              initial={{ x: '100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '100%' }}
-              transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="fixed right-0 top-[73px] bottom-0 w-80 glass-card border-l border-white/5 z-40"
-            >
-              <div className="p-6 border-b border-white/5 flex items-center justify-between">
-                <Link to={createPageUrl("Courses")} onClick={() => setIsSidebarOpen(false)}>
-                  <Button variant="ghost" className="text-gray-400 hover:text-white hover:bg-white/5 px-3">
-                    <FileText className="w-4 h-4 mr-2 rotate-180" />
-                    My Courses
-                  </Button>
-                </Link>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setIsSidebarOpen(false)}
-                  className="text-gray-400 hover:text-white hover:bg-white/5"
-                >
-                  <CloseIcon className="w-5 h-5" />
-                </Button>
-              </div>
-              <ScrollArea className="h-[calc(100%-73px)]">
-                <div className="p-4 space-y-6">
-                  {/* Chat Section */}
-                  <div>
-                    <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 px-2">
-                      Chat
-                    </h3>
-                    <div className="space-y-2">
-                      <Link
-                        to={createPageUrl(`CourseChat?id=${courseId}`)}
-                        onClick={() => setIsSidebarOpen(false)}
-                      >
-                        <motion.button
-                          whileHover={{ x: 4 }}
-                          className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-gray-300 hover:text-white hover:bg-white/5 transition-colors"
-                        >
-                          <FileText className="w-5 h-5 text-purple-400" />
-                          <span className="text-sm font-medium">New Chat</span>
-                        </motion.button>
-                      </Link>
-                      <motion.button
-                        whileHover={{ x: 4 }}
-                        className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-gray-300 hover:text-white hover:bg-white/5 transition-colors"
-                      >
-                        <FileText className="w-5 h-5 text-purple-400" />
-                        <span className="text-sm font-medium">Past Conversations</span>
-                        <span className="ml-auto text-xs text-gray-500">Coming Soon</span>
-                      </motion.button>
-                    </div>
-                  </div>
-
-                  {/* Course Content Section */}
-                  <div>
-                    <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 px-2">
-                      Course Content
-                    </h3>
-                    <div className="space-y-2">
-                      {SIDEBAR_ITEMS.map((item) => (
-                        <Link
-                          key={item.id}
-                          to={createPageUrl(`CourseContent?courseId=${courseId}&category=${item.id}`)}
-                          onClick={() => setIsSidebarOpen(false)}
-                        >
-                          <motion.button
-                            whileHover={{ x: 4 }}
-                            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-colors ${
-                              category === item.id
-                                ? 'bg-purple-500/20 text-white border border-purple-500/30'
-                                : 'text-gray-300 hover:text-white hover:bg-white/5'
-                            }`}
-                          >
-                            <item.icon className="w-5 h-5 text-purple-400" />
-                            <span className="text-sm font-medium">{item.label}</span>
-                          </motion.button>
-                        </Link>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </ScrollArea>
-            </motion.aside>
-          </>
-        )}
-      </AnimatePresence>
+      <CourseSidebar
+        courseId={courseId}
+        isOpen={isSidebarOpen}
+        onClose={() => setIsSidebarOpen(false)}
+        activeCategory={category}
+      />
     </div>
   );
 }
