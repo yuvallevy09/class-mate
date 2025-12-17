@@ -7,7 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.chat_engine import ChatEngine, ChatHistoryItem
 from app.api.deps import get_current_user
+from app.core.settings import Settings, get_settings
 from app.db.models.chat_conversation import ChatConversation
 from app.db.models.chat_message import ChatMessage
 from app.db.models.course import Course
@@ -33,6 +35,7 @@ async def course_chat(
     body: CourseChatRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
 ) -> CourseChatResponse:
     course = await _ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
 
@@ -56,12 +59,37 @@ async def course_chat(
         db.add(conversation)
         await db.flush()  # get conversation.id
 
+    # Load last N messages (asc) for conversational context.
+    # Do this BEFORE inserting the new user message to avoid duplicate user_message in history.
+    max_n = int(settings.chat_history_max_messages)
+    stmt = (
+        select(ChatMessage)
+        .where(ChatMessage.conversation_id == conversation.id)
+        .order_by(ChatMessage.created_at.desc())
+        .limit(max_n)
+    )
+    res = await db.execute(stmt)
+    recent_desc = list(res.scalars().all())
+    recent_asc = list(reversed(recent_desc))
+    history = [ChatHistoryItem(role=m.role, content=m.content) for m in recent_asc]
+
     # Persist user message.
     db.add(ChatMessage(conversation_id=conversation.id, role="user", content=body.message))
 
-    # v0 stub: echo back a deterministic response; keep API contract stable.
-    # Later: build prompt from course + contents, add citations, streaming, etc.
-    reply = f"(stub) {course.name}: {body.message}"
+    # Phase 1: real LLM reply (no RAG yet). Keep API contract stable.
+    try:
+        engine = ChatEngine(settings)
+        reply = await engine.generate_reply(
+            course_name=course.name,
+            course_description=course.description,
+            history=history,
+            user_message=body.message,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="LLM request failed") from e
+
     db.add(ChatMessage(conversation_id=conversation.id, role="assistant", content=reply))
 
     # Bump conversation activity.

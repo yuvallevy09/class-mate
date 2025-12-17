@@ -70,6 +70,14 @@ async def test_course_chat_requires_csrf_and_auth_and_ownership_and_valid_messag
 
     transport = httpx.ASGITransport(app=app)
 
+    # Mock the LLM so tests don't hit external APIs.
+    from app.api.v1 import chat as chat_api
+
+    async def _mock_generate_reply(self, **kwargs) -> str:  # noqa: ANN001
+        return "mocked assistant reply"
+
+    chat_api.ChatEngine.generate_reply = _mock_generate_reply  # type: ignore[method-assign]
+
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c1:
         csrf = await c1.get("/api/v1/auth/csrf")
         token = csrf.json()["csrfToken"]
@@ -127,7 +135,8 @@ async def test_course_chat_requires_csrf_and_auth_and_ownership_and_valid_messag
         assert messages[0]["role"] == "user"
         assert messages[0]["content"] == "hello"
         assert messages[1]["role"] == "assistant"
-        assert "(stub)" in messages[1]["content"]
+        assert messages[1]["content"] == "mocked assistant reply"
+        assert "(stub)" not in messages[1]["content"]
 
         # Conversations are listed per course (most recent first).
         convos = await c1.get(f"/api/v1/courses/{course1_id}/conversations")

@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     s3_download_expires_seconds: int = Field(default=300, validation_alias="S3_DOWNLOAD_EXPIRES_SECONDS")
     upload_max_size_bytes: int = Field(default=26214400, validation_alias="UPLOAD_MAX_SIZE_BYTES")
 
+    # LLM (Gemini)
+    # We read both, but the caller should choose deterministically and pass api_key explicitly.
+    google_api_key: str | None = Field(default=None, validation_alias="GOOGLE_API_KEY")
+    gemini_api_key: str | None = Field(default=None, validation_alias="GEMINI_API_KEY")
+    gemini_model: str = Field(default="gemini-2.5-flash", validation_alias="GEMINI_MODEL")
+    chat_history_max_messages: int = Field(default=12, validation_alias="CHAT_HISTORY_MAX_MESSAGES")
+    chat_temperature: float = Field(default=0.0, validation_alias="CHAT_TEMPERATURE")
+
     # JWT / cookies
     jwt_secret: str = Field(default="dev-change-me", validation_alias="JWT_SECRET")
     jwt_access_ttl_seconds: int = Field(default=900, validation_alias="JWT_ACCESS_TTL_SECONDS")
@@ -80,6 +88,10 @@ class Settings(BaseSettings):
             raise ValueError("S3_DOWNLOAD_EXPIRES_SECONDS must be > 0")
         if self.upload_max_size_bytes <= 0:
             raise ValueError("UPLOAD_MAX_SIZE_BYTES must be > 0")
+        if self.chat_history_max_messages <= 0:
+            raise ValueError("CHAT_HISTORY_MAX_MESSAGES must be > 0")
+        if not (0.0 <= float(self.chat_temperature) <= 2.0):
+            raise ValueError("CHAT_TEMPERATURE must be between 0 and 2")
         return self
 
 
