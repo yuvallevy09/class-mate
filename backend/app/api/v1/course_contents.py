@@ -4,7 +4,7 @@ from uuid import UUID
 
 import boto3
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +15,7 @@ from app.db.models.course import Course
 from app.db.models.course_content import CourseContent
 from app.db.models.user import User
 from app.db.session import get_db
+from app.rag.ingest import index_course_for_user
 from app.schemas.course_content import CourseContentCreate, CourseContentPublic
 
 router = APIRouter(tags=["course-contents"])
@@ -63,6 +64,7 @@ async def list_course_contents(
 async def create_course_content(
     course_id: UUID,
     body: CourseContentCreate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
@@ -88,6 +90,12 @@ async def create_course_content(
     db.add(content)
     await db.commit()
     await db.refresh(content)
+
+    # Demo-friendly ingestion trigger (PDF-only handled inside the indexer).
+    # BackgroundTasks runs in-process; heavy work is isolated from the request DB session.
+    if content.file_key and settings.rag_enabled:
+        background_tasks.add_task(index_course_for_user, user_id=current_user.id, course_id=course_id)
+
     return content
 
 

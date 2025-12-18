@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+from uuid import UUID
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.core.settings import Settings
+from app.rag.retrieve import retrieve_course_hits
+from app.schemas.chat import ChatCitation
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,57 @@ class ChatEngine:
             f"Course name: {course_name}\n"
             f"Course description: {desc if desc else '(none)'}\n"
         )
+
+    def _build_rag_context_prompt(self, hits) -> str:
+        """
+        Provide retrieved excerpts as a separate system message.
+        Keep it short to avoid ballooning prompt size.
+        """
+        lines: list[str] = [
+            "Course materials excerpts (retrieved):",
+            "Use these excerpts to answer if relevant. If they are insufficient, say so.",
+            "Do not invent citations. If you use an excerpt, cite it by its [#] number.",
+            "",
+        ]
+
+        for i, hit in enumerate(hits, start=1):
+            snippet = (hit.text or "").strip()
+            if len(snippet) > 900:
+                snippet = snippet[:900].rstrip() + "…"
+            lines.append(f"[{i}] {snippet}")
+            meta = hit.metadata or {}
+            src = []
+            if meta.get("original_filename"):
+                src.append(str(meta["original_filename"]))
+            if meta.get("page"):
+                src.append(f"p.{meta['page']}")
+            if src:
+                lines.append(f"    Source: {' '.join(src)}")
+        return "\n".join(lines).strip() + "\n"
+
+    def _hits_to_citations(self, hits) -> list[ChatCitation]:
+        citations: list[ChatCitation] = []
+        for hit in hits:
+            meta = hit.metadata or {}
+            content_id = meta.get("content_id")
+            try:
+                content_uuid = UUID(str(content_id)) if content_id else None
+            except ValueError:
+                content_uuid = None
+            citations.append(
+                ChatCitation(
+                    content_id=content_uuid,
+                    title=meta.get("title"),
+                    url=None,
+                    snippet=(hit.text or "")[:900],
+                    extra={
+                        "page": meta.get("page"),
+                        "original_filename": meta.get("original_filename"),
+                        "score": hit.score,
+                    },
+                )
+            )
+        return citations
 
     def _build_title_prompt(self, *, course_name: str, first_user_message: str) -> list:
         """
@@ -141,11 +195,13 @@ class ChatEngine:
     async def generate_reply(
         self,
         *,
+        user_id: int | None = None,
+        course_id: UUID | None = None,
         course_name: str,
         course_description: str | None,
         history: list[ChatHistoryItem],
         user_message: str,
-    ) -> str:
+    ) -> tuple[str, list[ChatCitation]]:
         # Hard cap: enforce the last N history items at the engine boundary.
         max_n = int(self._settings.chat_history_max_messages)
         history = history[-max_n:] if max_n > 0 else []
@@ -159,8 +215,29 @@ class ChatEngine:
         system_prompt = self._build_system_prompt(course_name=course_name, course_description=course_description)
         messages = self._to_lc_messages(system_prompt=system_prompt, history=history, user_message=user_message)
 
+        citations: list[ChatCitation] = []
+
+        # RAG (best-effort): load per-course persisted index and inject context.
+        if self._settings.rag_enabled and user_id and course_id:
+            try:
+                hits = retrieve_course_hits(
+                    settings=self._settings,
+                    user_id=int(user_id),
+                    course_id=course_id,
+                    query=user_message,
+                    top_k=int(self._settings.rag_top_k),
+                )
+            except Exception:
+                hits = []
+
+            if hits:
+                rag_prompt = self._build_rag_context_prompt(hits)
+                # Insert after base system prompt.
+                messages.insert(1, SystemMessage(content=rag_prompt))
+                citations = self._hits_to_citations(hits)
+
         res = await llm.ainvoke(messages)
         text = (getattr(res, "content", "") or "").strip()
-        return text or "I’m not sure—could you rephrase your question or provide more course context?"
+        return (text or "I’m not sure—could you rephrase your question or provide more course context?"), citations
 
 

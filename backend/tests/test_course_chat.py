@@ -73,8 +73,8 @@ async def test_course_chat_requires_csrf_and_auth_and_ownership_and_valid_messag
     # Mock the LLM so tests don't hit external APIs.
     from app.api.v1 import chat as chat_api
 
-    async def _mock_generate_reply(self, **kwargs) -> str:  # noqa: ANN001
-        return "mocked assistant reply"
+    async def _mock_generate_reply(self, **kwargs):  # noqa: ANN001
+        return "mocked assistant reply", []
 
     async def _mock_generate_title(self, **kwargs) -> str:  # noqa: ANN001
         return "Mocked conversation title"

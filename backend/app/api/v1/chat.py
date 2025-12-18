@@ -94,7 +94,9 @@ async def course_chat(
             except Exception:
                 pass
 
-        reply = await engine.generate_reply(
+        reply, citations = await engine.generate_reply(
+            user_id=current_user.id,
+            course_id=course.id,
             course_name=course.name,
             course_description=course.description,
             history=history,
@@ -112,7 +114,7 @@ async def course_chat(
 
     await db.commit()
 
-    return CourseChatResponse(text=reply, citations=[], conversation_id=conversation.id)
+    return CourseChatResponse(text=reply, citations=citations, conversation_id=conversation.id)
 
 
 @router.get("/courses/{course_id}/conversations", response_model=list[ChatConversationPublic])

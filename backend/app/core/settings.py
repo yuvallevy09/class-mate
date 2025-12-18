@@ -40,6 +40,14 @@ class Settings(BaseSettings):
     chat_history_max_messages: int = Field(default=12, validation_alias="CHAT_HISTORY_MAX_MESSAGES")
     chat_temperature: float = Field(default=0.0, validation_alias="CHAT_TEMPERATURE")
 
+    # RAG (local-first, persisted to disk)
+    rag_enabled: bool = Field(default=True, validation_alias="RAG_ENABLED")
+    rag_store_dir: str = Field(default=".rag_store", validation_alias="RAG_STORE_DIR")
+    rag_top_k: int = Field(default=4, validation_alias="RAG_TOP_K")
+    rag_chunk_size: int = Field(default=1200, validation_alias="RAG_CHUNK_SIZE")
+    rag_chunk_overlap: int = Field(default=200, validation_alias="RAG_CHUNK_OVERLAP")
+    rag_embedding_model: str = Field(default="models/embedding-001", validation_alias="RAG_EMBEDDING_MODEL")
+
     # JWT / cookies
     jwt_secret: str = Field(default="dev-change-me", validation_alias="JWT_SECRET")
     jwt_access_ttl_seconds: int = Field(default=900, validation_alias="JWT_ACCESS_TTL_SECONDS")
@@ -92,6 +100,14 @@ class Settings(BaseSettings):
             raise ValueError("CHAT_HISTORY_MAX_MESSAGES must be > 0")
         if not (0.0 <= float(self.chat_temperature) <= 2.0):
             raise ValueError("CHAT_TEMPERATURE must be between 0 and 2")
+        if self.rag_top_k <= 0:
+            raise ValueError("RAG_TOP_K must be > 0")
+        if self.rag_chunk_size <= 0:
+            raise ValueError("RAG_CHUNK_SIZE must be > 0")
+        if self.rag_chunk_overlap < 0:
+            raise ValueError("RAG_CHUNK_OVERLAP must be >= 0")
+        if self.rag_chunk_overlap >= self.rag_chunk_size:
+            raise ValueError("RAG_CHUNK_OVERLAP must be < RAG_CHUNK_SIZE")
         return self
 
 
