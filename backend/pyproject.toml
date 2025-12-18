@@ -19,6 +19,9 @@ dependencies = [
   "langchain-community>=0.3,<1.0",
   "langchain-text-splitters>=0.3,<1.0",
   "pypdf>=4.0,<6.0",
+  "sentence-transformers>=2.6,<4.0",
+  "langchain-huggingface>=0.3.1",
+  "langchain-chroma>=0.2.0",
 ]
 
 [dependency-groups]

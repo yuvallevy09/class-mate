@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import Navbar from "@/components/Navbar";
 import CourseSidebar from "@/components/CourseSidebar";
@@ -313,6 +313,9 @@ export default function CourseContent() {
         <DialogContent className="bg-[#131313] border-white/10 text-white max-w-md">
           <DialogHeader>
             <DialogTitle className="text-xl font-bold">Add {CATEGORY_LABELS[category]}</DialogTitle>
+            <DialogDescription className="text-gray-400">
+              Add a new item to this course category. Attach a PDF to enable retrieval-augmented answers in chat.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-5 pt-4">
             <div>

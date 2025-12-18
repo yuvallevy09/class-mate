@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI
 from fastapi import Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,6 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.router import api_router
 from app.core.settings import get_settings
 from app.db.session import get_db
+
+
+# Keep local dev logs clean by default (can still be overridden by real env vars).
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
+os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
+os.environ.setdefault("LANGCHAIN_TELEMETRY", "false")
 
 
 def create_app() -> FastAPI:

@@ -48,6 +48,17 @@ class Settings(BaseSettings):
     rag_chunk_overlap: int = Field(default=200, validation_alias="RAG_CHUNK_OVERLAP")
     rag_embedding_model: str = Field(default="models/embedding-001", validation_alias="RAG_EMBEDDING_MODEL")
 
+    # RAG embeddings provider
+    # - "gemini": uses GoogleGenerativeAIEmbeddings (requires GOOGLE_API_KEY/GEMINI_API_KEY + quota)
+    # - "hf": uses HuggingFaceEmbeddings (local, no quota; heavier dependency)
+    rag_embeddings_provider: Literal["gemini", "hf"] = Field(
+        default="gemini", validation_alias="RAG_EMBEDDINGS_PROVIDER"
+    )
+    rag_local_embedding_model: str = Field(
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        validation_alias="RAG_LOCAL_EMBEDDING_MODEL",
+    )
+
     # JWT / cookies
     jwt_secret: str = Field(default="dev-change-me", validation_alias="JWT_SECRET")
     jwt_access_ttl_seconds: int = Field(default=900, validation_alias="JWT_ACCESS_TTL_SECONDS")

@@ -193,8 +193,8 @@ export default function CourseChat() {
   // Once server messages include an optimistic user message, drop the local optimistic copy.
   useEffect(() => {
     if (!optimisticMessages.length) return;
-    setOptimisticMessages((prev) =>
-      prev.filter(
+    setOptimisticMessages((prev) => {
+      const next = prev.filter(
         (o) =>
           !messages.some(
             (m) =>
@@ -202,8 +202,10 @@ export default function CourseChat() {
               typeof m?.content === "string" &&
               m.content === o.content
           )
-      )
-    );
+      );
+      // Avoid infinite re-renders: if nothing changed, preserve the same array reference.
+      return next.length === prev.length ? prev : next;
+    });
   }, [messages, optimisticMessages.length]);
 
   return (

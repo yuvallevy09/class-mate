@@ -13,9 +13,27 @@ from app.rag.types import RagHit
 
 def _get_embeddings(settings: Settings):
     """
-    Prefer Gemini embeddings to match the chat provider.
+    Embeddings provider:
+    - Gemini (remote): requires GOOGLE_API_KEY/GEMINI_API_KEY and quota.
+    - HuggingFace (local): no quota, but requires heavier deps + model download.
+
     If not configured, raise ValueError so callers can fallback gracefully.
     """
+    provider = (getattr(settings, "rag_embeddings_provider", "gemini") or "gemini").strip().lower()
+
+    if provider == "hf":
+        try:
+            from langchain_huggingface import HuggingFaceEmbeddings  # type: ignore
+        except Exception as e:  # pragma: no cover
+            raise ValueError("HuggingFaceEmbeddings not available") from e
+
+        model_name = (
+            (getattr(settings, "rag_local_embedding_model", None) or "").strip()
+            or "sentence-transformers/all-MiniLM-L6-v2"
+        )
+        return HuggingFaceEmbeddings(model_name=model_name, encode_kwargs={"normalize_embeddings": True})
+
+    # Default: Gemini embeddings
     try:
         from langchain_google_genai import GoogleGenerativeAIEmbeddings  # type: ignore
     except Exception as e:  # pragma: no cover
@@ -32,7 +50,7 @@ def _get_embeddings(settings: Settings):
 
 def _load_chroma(*, persist_dir: Path, settings: Settings, collection_name: str):
     try:
-        from langchain_community.vectorstores import Chroma  # type: ignore
+        from langchain_chroma import Chroma  # type: ignore
     except Exception as e:  # pragma: no cover
         raise ValueError("Chroma vectorstore integration not available") from e
 
