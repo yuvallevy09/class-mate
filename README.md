@@ -21,9 +21,11 @@ Users can create courses, upload and manage lecture slides/PDFs/other resources,
 - **File uploads (S3-compatible, presigned URLs)**:
   - Backend issues **presigned PUT** URLs; browser uploads directly to object storage.
   - Backend can generate **presigned download** links for attached files.
-- **Course chat (API contract wired end-to-end)**:
+- **Course chat (course-scoped, persisted)**:
   - Frontend sends messages to a course-scoped chat endpoint.
-  - Current backend response is a **deterministic stub** to keep the contract stable while LLM/RAG is implemented.
+  - Backend persists **conversations + messages** in Postgres.
+  - Backend generates responses via **Gemini (LangChain)** when `GOOGLE_API_KEY` or `GEMINI_API_KEY` is configured.
+  - Responses include `citations: []` today (RAG/citations are planned but not implemented yet).
 
 ### Security & privacy baseline
 
@@ -112,7 +114,11 @@ Configure env:
 - Copy `frontend/env.example` to `frontend/.env.local` (or `frontend/.env`)
 - Set:
   - `VITE_API_URL=http://localhost:3001`
-  - `VITE_CHAT_ENABLED=true` (enables the UI’s send button; backend chat is currently stubbed)
+  - `VITE_CHAT_ENABLED=true` (enables the UI chat input; backend chat requires a Gemini API key)
+
+Configure backend chat keys (optional, only needed for chat replies):
+
+- Set `GOOGLE_API_KEY` (preferred) or `GEMINI_API_KEY` in `backend/.env`
 
 Start the frontend (Vite default port **5173**):
 

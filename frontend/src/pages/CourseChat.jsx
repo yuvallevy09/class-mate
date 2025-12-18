@@ -10,6 +10,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { toast } from "@/components/ui/use-toast";
 import Navbar from "@/components/Navbar";
 import CourseSidebar from "@/components/CourseSidebar";
 
@@ -28,6 +29,7 @@ export default function CourseChat() {
   const [isTyping, setIsTyping] = useState(false);
   const [optimisticMessages, setOptimisticMessages] = useState([]);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+  const [sendError, setSendError] = useState(null);
   const scrollContainerRef = useRef(null);
   const textareaRef = useRef(null);
   
@@ -100,6 +102,7 @@ export default function CourseChat() {
 
       setShouldAutoScroll(true);
       setIsTyping(true);
+      setSendError(null);
       setMessage("");
       setOptimisticMessages((prev) => [
         ...prev,
@@ -145,6 +148,24 @@ export default function CourseChat() {
       }
       setMessage(ctx?.draftBeforeSend ?? userMessage ?? "");
       requestAnimationFrame(() => textareaRef.current?.focus());
+
+      const status = _err?.status;
+      const detail = _err?.data?.detail;
+      let msg = "Failed to send message. Please try again.";
+      if (status === 501) {
+        msg =
+          (typeof detail === "string" && detail) ||
+          "Chat is not configured on the server yet. Set GOOGLE_API_KEY or GEMINI_API_KEY in backend/.env.";
+      } else if (status === 502) {
+        msg = "The LLM request failed (502). Please retry.";
+      } else if (status === 403) {
+        msg = "Request blocked by CSRF. Refresh the page and try again.";
+      }
+      setSendError(msg);
+      toast({
+        title: "Chat error",
+        description: msg,
+      });
     }
   });
 
@@ -336,7 +357,12 @@ export default function CourseChat() {
             <div className="max-w-3xl mx-auto">
               {!chatEnabled && (
                 <div className="mb-3 text-xs text-gray-400">
-                  Chat is disabled until the LLM/chat endpoint is implemented.
+                  Chat is disabled (set <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono">VITE_CHAT_ENABLED=true</code> to enable).
+                </div>
+              )}
+              {!!sendError && chatEnabled && (
+                <div className="mb-3 text-xs text-red-300/90">
+                  {sendError}
                 </div>
               )}
               <div className="glass-card rounded-2xl p-2 flex items-end gap-2">

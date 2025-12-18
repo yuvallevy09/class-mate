@@ -76,7 +76,11 @@ async def test_course_chat_requires_csrf_and_auth_and_ownership_and_valid_messag
     async def _mock_generate_reply(self, **kwargs) -> str:  # noqa: ANN001
         return "mocked assistant reply"
 
+    async def _mock_generate_title(self, **kwargs) -> str:  # noqa: ANN001
+        return "Mocked conversation title"
+
     chat_api.ChatEngine.generate_reply = _mock_generate_reply  # type: ignore[method-assign]
+    chat_api.ChatEngine.generate_title = _mock_generate_title  # type: ignore[method-assign]
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c1:
         csrf = await c1.get("/api/v1/auth/csrf")
@@ -144,6 +148,7 @@ async def test_course_chat_requires_csrf_and_auth_and_ownership_and_valid_messag
         convos_body = convos.json()
         assert isinstance(convos_body, list) and len(convos_body) == 1
         assert convos_body[0]["id"] == convo_id
+        assert convos_body[0]["title"] == "Mocked conversation title"
 
         # Deleting a conversation requires CSRF.
         missing_csrf_delete = await c1.delete(f"/api/v1/conversations/{convo_id}")

@@ -1,34 +1,6 @@
 import * as realAuth from "./auth";
 import * as realCourses from "./courses";
 import * as realCourseContents from "./courseContents";
-import { request } from "./http";
-
-const DB_KEY = "classmate_db_v1";
-
-function uid() {
-  return globalThis.crypto?.randomUUID?.() ?? `id_${Math.random().toString(16).slice(2)}_${Date.now()}`;
-}
-
-function nowIso() {
-  return new Date().toISOString();
-}
-
-function loadDB() {
-  try {
-    const raw = localStorage.getItem(DB_KEY);
-    if (!raw) return { messages: [] };
-    const parsed = JSON.parse(raw);
-    return {
-      messages: Array.isArray(parsed.messages) ? parsed.messages : [],
-    };
-  } catch {
-    return { messages: [] };
-  }
-}
-
-function saveDB(db) {
-  localStorage.setItem(DB_KEY, JSON.stringify(db));
-}
 
 function sortByCreatedDate(items, order) {
   if (order === "-created_date") {
@@ -139,49 +111,6 @@ export const client = {
       async delete(id) {
         await realCourseContents.deleteCourseContent(id);
         return { ok: true };
-      },
-    },
-
-    ChatMessage: {
-      async filter(where, order) {
-        const db = loadDB();
-        const filtered = db.messages.filter((m) => matchesWhere(m, where));
-        return sortByCreatedDate(filtered, order);
-      },
-      async create(data) {
-        const db = loadDB();
-        const msg = {
-          id: uid(),
-          created_date: nowIso(),
-          course_id: data?.course_id,
-          role: data?.role,
-          content: data?.content ?? "",
-        };
-        db.messages.push(msg);
-        saveDB(db);
-        return msg;
-      },
-    },
-  },
-
-  integrations: {
-    Core: {
-      async UploadFile({ file }) {
-        if (!file) throw new Error("No file provided");
-        const file_url = URL.createObjectURL(file);
-        return { file_url };
-      },
-      async InvokeLLM({ courseId, message, conversationId } = {}) {
-        if (!courseId) throw new Error("courseId is required");
-        if (!message || !String(message).trim()) throw new Error("message is required");
-
-        return request(`/api/v1/courses/${encodeURIComponent(courseId)}/chat`, {
-          method: "POST",
-          body: {
-            message: String(message),
-            conversationId: conversationId ?? null,
-          },
-        });
       },
     },
   },

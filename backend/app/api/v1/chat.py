@@ -40,6 +40,7 @@ async def course_chat(
     course = await _ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
 
     conversation: ChatConversation | None = None
+    created_new_conversation = False
     if body.conversation_id:
         try:
             convo_id = UUID(str(body.conversation_id))
@@ -58,6 +59,7 @@ async def course_chat(
         conversation = ChatConversation(course_id=course.id, title=None)
         db.add(conversation)
         await db.flush()  # get conversation.id
+        created_new_conversation = True
 
     # Load last N messages (asc) for conversational context.
     # Do this BEFORE inserting the new user message to avoid duplicate user_message in history.
@@ -79,6 +81,19 @@ async def course_chat(
     # Phase 1: real LLM reply (no RAG yet). Keep API contract stable.
     try:
         engine = ChatEngine(settings)
+        # Best-effort: if this is a brand new conversation, generate a short title from the first message.
+        # If it fails for any reason, proceed without a title (UI already falls back to "Conversation").
+        if created_new_conversation and not conversation.title:
+            try:
+                title = await engine.generate_title(
+                    course_name=course.name,
+                    first_user_message=body.message,
+                )
+                if title:
+                    conversation.title = title
+            except Exception:
+                pass
+
         reply = await engine.generate_reply(
             course_name=course.name,
             course_description=course.description,
