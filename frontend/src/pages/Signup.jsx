@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { client } from "@/api/client";
+import { me, signup } from "@/api/auth";
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,7 +27,7 @@ export default function Signup() {
 
   const { data: user } = useQuery({
     queryKey: ["currentUser"],
-    queryFn: () => client.auth.me(),
+    queryFn: () => me(),
     retry: false,
   });
 
@@ -50,7 +50,7 @@ export default function Signup() {
       if (password.length < 8) throw new Error("Password must be at least 8 characters");
       if (password !== confirm) throw new Error("Passwords do not match");
 
-      await client.auth.signup({ displayName: dn, email, password });
+      await signup(email, password, dn);
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["currentUser"] });

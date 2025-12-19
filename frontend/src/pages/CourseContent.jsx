@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { client } from "@/api/client";
+import { getCourse } from "@/api/courses";
 import { listCourseContents, createCourseContent, deleteCourseContent, getDownloadUrl } from "@/api/courseContents";
 import { presignUpload } from "@/api/uploads";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -50,10 +50,7 @@ export default function CourseContent() {
 
   const { data: course } = useQuery({
     queryKey: ['course', courseId],
-    queryFn: async () => {
-      const courses = await client.entities.Course.filter({ id: courseId });
-      return courses[0];
-    },
+    queryFn: async () => getCourse(courseId),
     enabled: !!courseId
   });
 

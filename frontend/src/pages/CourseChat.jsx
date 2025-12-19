@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { client } from "@/api/client";
+import { getCourse } from "@/api/courses";
 import { listConversationMessages, sendCourseChat } from "@/api/chat";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
@@ -37,10 +37,7 @@ export default function CourseChat() {
 
   const { data: _course } = useQuery({
     queryKey: ['course', courseId],
-    queryFn: async () => {
-      const courses = await client.entities.Course.filter({ id: courseId });
-      return courses[0];
-    },
+    queryFn: async () => getCourse(courseId),
     enabled: !!courseId
   });
 

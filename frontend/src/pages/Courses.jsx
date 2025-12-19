@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { client } from "@/api/client";
+import { listCourses, createCourse, deleteCourse } from "@/api/courses";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { Search, Plus, BookOpen, ChevronRight, Grid3x3, List, Trash2 } from "lucide-react";
@@ -32,6 +32,13 @@ const GRADIENT_COLORS = [
   "from-violet-500 to-purple-600"
 ];
 
+function sortCoursesNewestFirst(items) {
+  const arr = Array.isArray(items) ? [...items] : [];
+  // Backend returns ISO timestamps in created_at; keep stable fallback.
+  arr.sort((a, b) => String(b?.created_at || "").localeCompare(String(a?.created_at || "")));
+  return arr;
+}
+
 export default function Courses() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
@@ -44,11 +51,15 @@ export default function Courses() {
 
   const { data: courses = [], isLoading } = useQuery({
     queryKey: ['courses'],
-    queryFn: () => client.entities.Course.list('-created_date')
+    queryFn: async () => sortCoursesNewestFirst(await listCourses())
   });
 
   const createCourseMutation = useMutation({
-    mutationFn: (courseData) => client.entities.Course.create(courseData),
+    mutationFn: (courseData) =>
+      createCourse({
+        name: courseData?.name ?? "",
+        description: courseData?.description ?? "",
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['courses'] });
       setIsAddDialogOpen(false);
@@ -57,7 +68,7 @@ export default function Courses() {
   });
 
   const deleteCourseMutation = useMutation({
-    mutationFn: (courseId) => client.entities.Course.delete(courseId),
+    mutationFn: (courseId) => deleteCourse(courseId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["courses"] });
       setIsDeleteDialogOpen(false);

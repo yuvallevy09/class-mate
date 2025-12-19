@@ -1,7 +1,7 @@
 import React from "react";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { client } from "@/api/client";
+import { me } from "@/api/auth";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Sparkles, BookOpen, Brain, Zap } from "lucide-react";
@@ -10,7 +10,7 @@ import Navbar from "@/components/Navbar";
 export default function Home() {
   const { data: user } = useQuery({
     queryKey: ["currentUser"],
-    queryFn: () => client.auth.me(),
+    queryFn: () => me(),
     retry: false,
   });
 

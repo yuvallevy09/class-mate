@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { client } from "@/api/client";
+import { me, login } from "@/api/auth";
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,7 +26,7 @@ export default function Login() {
 
   const { data: user } = useQuery({
     queryKey: ["currentUser"],
-    queryFn: () => client.auth.me(),
+    queryFn: () => me(),
     retry: false,
   });
 
@@ -41,7 +41,7 @@ export default function Login() {
   const loginMutation = useMutation({
     mutationFn: async () => {
       setError("");
-      await client.auth.login({ email, password });
+      await login(email, password);
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["currentUser"] });

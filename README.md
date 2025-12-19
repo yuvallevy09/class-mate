@@ -13,7 +13,7 @@ Users can create courses, upload and manage lecture slides/PDFs/other resources,
 
 ### Core product features
 
-- **Authentication (cookie-based)**: signup/login/logout with session refresh.
+- **Authentication (cookie-based)**: signup/login/logout with refresh sessions.
 - **Course management**: create/list/view/delete courses (per-user ownership enforced).
 - **Course content library**:
   - Create/list/delete content items per course and category (notes, exams, media, etc.).
@@ -22,10 +22,16 @@ Users can create courses, upload and manage lecture slides/PDFs/other resources,
   - Backend issues **presigned PUT** URLs; browser uploads directly to object storage.
   - Backend can generate **presigned download** links for attached files.
 - **Course chat (course-scoped, persisted)**:
-  - Frontend sends messages to a course-scoped chat endpoint.
-  - Backend persists **conversations + messages** in Postgres.
+  - Course chat endpoint: `POST /api/v1/courses/{courseId}/chat`
+  - Backend persists **conversations + messages** in Postgres and exposes:
+    - `GET /api/v1/courses/{courseId}/conversations`
+    - `GET /api/v1/conversations/{conversationId}/messages`
+    - `DELETE /api/v1/conversations/{conversationId}`
   - Backend generates responses via **Gemini (LangChain)** when `GOOGLE_API_KEY` or `GEMINI_API_KEY` is configured.
-  - Responses include `citations: []` today (RAG/citations are planned but not implemented yet).
+- **RAG (PDF → per-course vector index → citations)**:
+  - File-backed **PDF** course contents are indexed into a persisted per-course **Chroma** store on disk.
+  - Indexing is triggered automatically when you create a content item with an attached file (`POST /courses/{courseId}/contents`), and can also be triggered manually.
+  - Chat uses retrieval **best-effort** (injects retrieved excerpts into the prompt when an index exists) and returns `citations[]` with snippet + metadata (e.g. `original_filename`, `page`, `score`).
 
 ### Security & privacy baseline
 
@@ -49,6 +55,7 @@ This repo uses a simple monorepo layout with two apps:
   - SQLAlchemy (async) + Alembic migrations
   - Postgres for persistence
   - S3-compatible object storage (MinIO in local dev) for uploads
+  - Local-first RAG index persisted to disk (`.rag_store/` by default)
 
 ### Request flow (high level)
 
@@ -82,6 +89,11 @@ Start Postgres + MinIO:
 cd backend
 docker compose up -d
 ```
+
+Notes:
+
+- Postgres is exposed on **localhost:5433** (container port 5432).
+- MinIO S3 API is on **localhost:9000** and console UI is on **localhost:9001**.
 
 Run migrations:
 
@@ -147,6 +159,37 @@ npm run dev:backend
 
 ---
 
+## RAG: indexing and debugging (dev)
+
+RAG is **per-course** and stores a persisted Chroma index under:
+
+- `backend/.rag_store/users/{userId}/courses/{courseId}/` (by default; configurable via `RAG_STORE_DIR`)
+
+### How indexing works
+
+- **Upload flow**:
+  - Frontend requests a presigned URL: `POST /api/v1/uploads/presign`
+  - Browser uploads directly to S3/MinIO via the presigned `PUT`
+  - Frontend creates the content record with `file_key` + file metadata: `POST /api/v1/courses/{courseId}/contents`
+- **Indexing trigger**: when a content item with `file_key` is created and `RAG_ENABLED=true`, the backend schedules indexing in-process via `BackgroundTasks`.
+- **Currently indexed formats**: PDFs only (text is extracted with `pypdf` and chunked; no OCR).
+
+### Requirements
+
+- **S3 configured** (at minimum `S3_BUCKET`), because indexing fetches the uploaded PDFs from object storage.
+- **Embeddings configured**:
+  - **Gemini embeddings (default)**: set `GOOGLE_API_KEY` or `GEMINI_API_KEY` and ensure quota/billing allows embeddings.
+  - **Local embeddings**: set `RAG_EMBEDDINGS_PROVIDER=hf` (uses `sentence-transformers`, downloads the model on first run).
+
+### Debug endpoints
+
+- `GET /api/v1/courses/{courseId}/rag/status` — sanity info (enabled, index exists, PDF count, etc.)
+- `POST /api/v1/courses/{courseId}/rag/reindex` — rebuild/refresh the index in the background
+- `GET /api/v1/courses/{courseId}/rag/query?q=...&top_k=4` — retrieval-only debug (no LLM)
+- `POST /api/v1/courses/{courseId}/rag/clear` — dev helper: delete the on-disk index for the course
+
+---
+
 ## Tests
 
 Backend tests live in `backend/tests/` and cover core flows (auth, courses, chat contract, migrations, validation guards).
@@ -160,8 +203,10 @@ uv run pytest
 
 ## Roadmap (planned)
 
-- **LLM + RAG**: ground answers in uploaded course content with citations.
-- **Conversation persistence**: store chat threads/messages server-side (not just local storage).
+- **Richer citations UI**: show citations in the chat UI (and deep-link to downloads/pages).
+- **More file types**: ingestion beyond PDFs (DOCX/PPTX, plaintext notes, etc.).
+- **Better PDF understanding**: OCR for scanned slides, layout-aware chunking, improved metadata extraction.
+- **Background workers**: move indexing out of request process (queue + worker) for large courses.
 - **Richer course material understanding**: lecture segmentation, timestamped references, metadata extraction.
 - **Multilingual support** and improved search/discovery across content.
 

@@ -1,8 +1,7 @@
-/* eslint-disable react/prop-types */
 import { Navigate, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
-import { client } from "@/api/client";
+import { me } from "@/api/auth";
 import { Button } from "@/components/ui/button";
 
 export default function RequireAuth({ children }) {
@@ -16,7 +15,7 @@ export default function RequireAuth({ children }) {
     isFetching,
   } = useQuery({
     queryKey: ["currentUser"],
-    queryFn: () => client.auth.me(),
+    queryFn: () => me(),
     retry: false,
   });
 

@@ -1,7 +1,6 @@
-/* eslint-disable react/prop-types */
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { client } from "@/api/client";
+import { me, logout, deleteMe } from "@/api/auth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { BookOpen, User, LogOut, Menu } from "lucide-react";
@@ -35,15 +34,14 @@ export default function Navbar({ onMenuClick, showMenu = false, authVariant = "l
 
   const { data: user } = useQuery({
     queryKey: ["currentUser"],
-    queryFn: () => client.auth.me(),
+    queryFn: () => me(),
     retry: false,
   });
 
   const userLabel = user?.display_name || user?.email || "";
 
   const handleLogout = () => {
-    client.auth
-      .logout()
+    logout()
       .catch(() => {
         // If logout fails, still treat as logged-out in UI.
       })
@@ -56,7 +54,7 @@ export default function Navbar({ onMenuClick, showMenu = false, authVariant = "l
   const handleDeleteAccount = async () => {
     setIsDeleting(true);
     try {
-      await client.auth.deleteMe();
+      await deleteMe();
       await queryClient.invalidateQueries({ queryKey: ["currentUser"] });
       toast({ title: "Account deleted", description: "Your account and data were permanently deleted." });
       navigate("/");
