@@ -7,8 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class CourseContentCreate(BaseModel):
-    # Be tolerant to legacy fields from the existing UI (e.g. file_url/file_type).
-    model_config = ConfigDict(extra="ignore")
+    # Reject unknown fields so clients fail fast if they send legacy/typo keys.
+    model_config = ConfigDict(extra="forbid")
 
     category: str = Field(min_length=1, max_length=64)
     title: str = Field(min_length=1, max_length=255)
