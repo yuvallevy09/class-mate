@@ -12,6 +12,7 @@ from app.core.settings import Settings, get_settings
 from app.db.models.transcript_segment import TranscriptSegment
 from app.db.models.video_asset import VideoAsset
 from app.db.session import get_session_maker
+from app.rag.video_segments import index_video_asset_segments
 
 
 def _normalize_pull_zone(pull_zone_url: str) -> str:
@@ -119,5 +120,12 @@ async def ingest_bunny_transcript_for_video_asset(
         asset.transcript_ingested_at = datetime.now(timezone.utc)
         asset.status = "transcript_ingested"
         await db.commit()
+
+    # Best-effort: index segments into the per-course Chroma collection.
+    # This must not impact DB ingestion success.
+    try:
+        await index_video_asset_segments(video_asset_id=video_asset_id)
+    except Exception:
+        pass
 
 

@@ -7,59 +7,9 @@ from uuid import UUID
 from langchain_core.documents import Document
 
 from app.core.settings import Settings
+from app.rag.chroma import load_chroma
 from app.rag.paths import course_persist_dir
 from app.rag.types import RagHit
-
-
-def _get_embeddings(settings: Settings):
-    """
-    Embeddings provider:
-    - Gemini (remote): requires GOOGLE_API_KEY/GEMINI_API_KEY and quota.
-    - HuggingFace (local): no quota, but requires heavier deps + model download.
-
-    If not configured, raise ValueError so callers can fallback gracefully.
-    """
-    provider = (getattr(settings, "rag_embeddings_provider", "gemini") or "gemini").strip().lower()
-
-    if provider == "hf":
-        try:
-            from langchain_huggingface import HuggingFaceEmbeddings  # type: ignore
-        except Exception as e:  # pragma: no cover
-            raise ValueError("HuggingFaceEmbeddings not available") from e
-
-        model_name = (
-            (getattr(settings, "rag_local_embedding_model", None) or "").strip()
-            or "sentence-transformers/all-MiniLM-L6-v2"
-        )
-        return HuggingFaceEmbeddings(model_name=model_name, encode_kwargs={"normalize_embeddings": True})
-
-    # Default: Gemini embeddings
-    try:
-        from langchain_google_genai import GoogleGenerativeAIEmbeddings  # type: ignore
-    except Exception as e:  # pragma: no cover
-        raise ValueError("GoogleGenerativeAIEmbeddings not available") from e
-
-    api_key = (settings.google_api_key or "").strip() or (settings.gemini_api_key or "").strip()
-    if not api_key:
-        raise ValueError("Missing Gemini API key for embeddings")
-
-    # LLM model is configurable already; keep embedding model separately configurable for safety.
-    model = (getattr(settings, "rag_embedding_model", None) or "").strip() or "models/embedding-001"
-    return GoogleGenerativeAIEmbeddings(model=model, google_api_key=api_key)
-
-
-def _load_chroma(*, persist_dir: Path, settings: Settings, collection_name: str):
-    try:
-        from langchain_chroma import Chroma  # type: ignore
-    except Exception as e:  # pragma: no cover
-        raise ValueError("Chroma vectorstore integration not available") from e
-
-    embeddings = _get_embeddings(settings)
-    return Chroma(
-        collection_name=collection_name,
-        persist_directory=str(persist_dir),
-        embedding_function=embeddings,
-    )
 
 
 def course_index_exists(*, settings: Settings, user_id: int, course_id: UUID) -> bool:
@@ -76,6 +26,7 @@ def retrieve_course_hits(
     course_id: UUID,
     query: str,
     top_k: int,
+    where: dict[str, Any] | None = None,
 ) -> list[RagHit]:
     persist_dir = course_persist_dir(
         rag_store_dir=settings.rag_store_dir, user_id=user_id, course_id=course_id
@@ -83,18 +34,45 @@ def retrieve_course_hits(
     if not persist_dir.exists():
         return []
 
-    store = _load_chroma(
+    store = load_chroma(
         persist_dir=persist_dir,
         settings=settings,
         collection_name=f"classmate_course_{course_id}",
     )
 
     # Returns list[(Document, score)]
-    pairs: list[tuple[Document, float]] = store.similarity_search_with_score(query, k=int(top_k))
+    try:
+        # langchain-chroma supports metadata filtering via `filter=...`
+        pairs: list[tuple[Document, float]] = store.similarity_search_with_score(
+            query,
+            k=int(top_k),
+            filter=(where or None),
+        )
+    except TypeError:
+        # Older versions may not support the `filter` kwarg.
+        pairs = store.similarity_search_with_score(query, k=int(top_k))
     hits: list[RagHit] = []
+    seen: set[str] = set()
     for doc, score in pairs:
         meta: dict[str, Any] = dict(doc.metadata or {})
-        hits.append(RagHit(text=str(doc.page_content or ""), metadata=meta, score=float(score)))
+        text = str(doc.page_content or "")
+        # De-dupe defensive: Chroma can occasionally return duplicate docs if the collection
+        # contains legacy duplicates or mixed ID schemes.
+        fp = "|".join(
+            [
+                str(meta.get("doc_type") or ""),
+                str(meta.get("content_id") or ""),
+                str(meta.get("video_guid") or ""),
+                str(meta.get("video_asset_id") or ""),
+                str(meta.get("start_sec") or ""),
+                str(meta.get("end_sec") or ""),
+                text[:200],
+            ]
+        )
+        if fp in seen:
+            continue
+        seen.add(fp)
+        hits.append(RagHit(text=text, metadata=meta, score=float(score)))
     return hits
 
 

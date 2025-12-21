@@ -74,6 +74,16 @@ class ChatEngine:
                 src.append(str(meta["original_filename"]))
             if meta.get("page"):
                 src.append(f"p.{meta['page']}")
+            if meta.get("video_guid"):
+                # Video transcript segment
+                try:
+                    start = float(meta.get("start_sec") or 0.0)
+                    end = float(meta.get("end_sec") or 0.0)
+                    src.append(f"video:{meta['video_guid']} {start:.0f}s→{end:.0f}s")
+                except Exception:
+                    src.append(f"video:{meta['video_guid']}")
+            if meta.get("chapter_title"):
+                src.append(f"chapter:{meta['chapter_title']}")
             if src:
                 lines.append(f"    Source: {' '.join(src)}")
         return "\n".join(lines).strip() + "\n"
@@ -87,17 +97,32 @@ class ChatEngine:
                 content_uuid = UUID(str(content_id)) if content_id else None
             except ValueError:
                 content_uuid = None
+            # Video metadata (best-effort)
+            extra = {
+                "page": meta.get("page"),
+                "original_filename": meta.get("original_filename"),
+                "score": hit.score,
+                "doc_type": meta.get("doc_type"),
+            }
+            if meta.get("video_guid"):
+                extra.update(
+                    {
+                        "type": "video",
+                        "videoGuid": meta.get("video_guid"),
+                        "videoAssetId": meta.get("video_asset_id"),
+                        "startSec": meta.get("start_sec"),
+                        "endSec": meta.get("end_sec"),
+                        "languageCode": meta.get("language_code"),
+                        "chapterTitle": meta.get("chapter_title"),
+                    }
+                )
             citations.append(
                 ChatCitation(
                     content_id=content_uuid,
-                    title=meta.get("title"),
+                    title=meta.get("title") or meta.get("chapter_title"),
                     url=None,
                     snippet=(hit.text or "")[:900],
-                    extra={
-                        "page": meta.get("page"),
-                        "original_filename": meta.get("original_filename"),
-                        "score": hit.score,
-                    },
+                    extra=extra,
                 )
             )
         return citations

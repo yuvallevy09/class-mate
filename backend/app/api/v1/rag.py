@@ -172,6 +172,7 @@ async def rag_query(
     course_id: UUID,
     q: str,
     top_k: int = 4,
+    doc_type: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
@@ -188,12 +189,14 @@ async def rag_query(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="q is required")
 
     try:
+        where = {"doc_type": doc_type.strip()} if doc_type and doc_type.strip() else None
         hits = retrieve_course_hits(
             settings=settings,
             user_id=int(current_user.id),
             course_id=course_id,
             query=q.strip(),
             top_k=int(top_k),
+            where=where,
         )
     except Exception as e:
         # Common failure mode in local dev: embeddings provider rejects requests due to quota/billing.
@@ -222,6 +225,12 @@ async def rag_query(
                     "title": meta.get("title"),
                     "original_filename": meta.get("original_filename"),
                     "page": meta.get("page"),
+                    "doc_type": meta.get("doc_type"),
+                    "video_guid": meta.get("video_guid"),
+                    "video_asset_id": meta.get("video_asset_id"),
+                    "start_sec": meta.get("start_sec"),
+                    "end_sec": meta.get("end_sec"),
+                    "language_code": meta.get("language_code"),
                 },
             }
         )

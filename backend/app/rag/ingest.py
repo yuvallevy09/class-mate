@@ -13,6 +13,7 @@ from app.core.settings import Settings, get_settings
 from app.db.models.course import Course
 from app.db.models.course_content import CourseContent
 from app.db.session import get_session_maker
+from app.rag.chroma import get_embeddings, load_chroma
 from app.rag.paths import course_persist_dir
 
 
@@ -24,42 +25,6 @@ def _s3_client(settings: Settings):
         kwargs["aws_access_key_id"] = settings.s3_access_key_id
         kwargs["aws_secret_access_key"] = settings.s3_secret_access_key
     return boto3.client(**kwargs)
-
-
-def _get_embeddings(settings: Settings):
-    """
-    Embeddings provider:
-    - Gemini (remote): requires GOOGLE_API_KEY/GEMINI_API_KEY and quota.
-    - HuggingFace (local): no quota, but requires heavier deps + model download.
-
-    Raises ValueError if not configured/available; callers should treat as "indexing disabled".
-    """
-    provider = (getattr(settings, "rag_embeddings_provider", "gemini") or "gemini").strip().lower()
-
-    if provider == "hf":
-        try:
-            from langchain_huggingface import HuggingFaceEmbeddings  # type: ignore
-        except Exception as e:  # pragma: no cover
-            raise ValueError("HuggingFaceEmbeddings not available") from e
-
-        model_name = (
-            (getattr(settings, "rag_local_embedding_model", None) or "").strip()
-            or "sentence-transformers/all-MiniLM-L6-v2"
-        )
-        return HuggingFaceEmbeddings(model_name=model_name, encode_kwargs={"normalize_embeddings": True})
-
-    # Default: Gemini embeddings
-    try:
-        from langchain_google_genai import GoogleGenerativeAIEmbeddings  # type: ignore
-    except Exception as e:  # pragma: no cover
-        raise ValueError("GoogleGenerativeAIEmbeddings not available") from e
-
-    api_key = (settings.google_api_key or "").strip() or (settings.gemini_api_key or "").strip()
-    if not api_key:
-        raise ValueError("Missing Gemini API key for embeddings")
-
-    model = (getattr(settings, "rag_embedding_model", None) or "").strip() or "models/embedding-001"
-    return GoogleGenerativeAIEmbeddings(model=model, google_api_key=api_key)
 
 
 def _text_splitter(settings: Settings):
@@ -93,17 +58,6 @@ def _extract_pdf_pages(pdf_bytes: bytes) -> list[tuple[int, str]]:
     return out
 
 
-def _load_chroma(*, persist_dir: Path, settings: Settings, collection_name: str):
-    from langchain_chroma import Chroma  # type: ignore
-
-    embeddings = _get_embeddings(settings)
-    return Chroma(
-        collection_name=collection_name,
-        persist_directory=str(persist_dir),
-        embedding_function=embeddings,
-    )
-
-
 async def index_course_for_user(*, user_id: int, course_id: UUID) -> None:
     """
     Build/refresh a per-course persisted Chroma index from all PDF contents for the course.
@@ -119,7 +73,7 @@ async def index_course_for_user(*, user_id: int, course_id: UUID) -> None:
 
     # If embeddings aren't configured, skip indexing (chat will still fallback).
     try:
-        _get_embeddings(settings)
+        get_embeddings(settings)
     except ValueError:
         return
 
@@ -146,7 +100,7 @@ async def index_course_for_user(*, user_id: int, course_id: UUID) -> None:
     persist_dir = course_persist_dir(rag_store_dir=settings.rag_store_dir, user_id=user_id, course_id=course_id)
     persist_dir.mkdir(parents=True, exist_ok=True)
 
-    store = _load_chroma(
+    store = load_chroma(
         persist_dir=persist_dir,
         settings=settings,
         collection_name=f"classmate_course_{course_id}",
