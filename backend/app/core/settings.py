@@ -59,6 +59,17 @@ class Settings(BaseSettings):
         validation_alias="RAG_LOCAL_EMBEDDING_MODEL",
     )
 
+    # Bunny Stream (webhooks + captions ingestion)
+    bunny_webhook_secret: str | None = Field(default=None, validation_alias="BUNNY_WEBHOOK_SECRET")
+    bunny_webhook_rate_limit_per_minute: int = Field(
+        default=120,
+        validation_alias="BUNNY_WEBHOOK_RATE_LIMIT_PER_MINUTE",
+    )
+    bunny_default_captions_language_code: str = Field(
+        default="en",
+        validation_alias="BUNNY_DEFAULT_CAPTIONS_LANGUAGE_CODE",
+    )
+
     # JWT / cookies
     jwt_secret: str = Field(default="dev-change-me", validation_alias="JWT_SECRET")
     jwt_access_ttl_seconds: int = Field(default=900, validation_alias="JWT_ACCESS_TTL_SECONDS")
@@ -119,6 +130,8 @@ class Settings(BaseSettings):
             raise ValueError("RAG_CHUNK_OVERLAP must be >= 0")
         if self.rag_chunk_overlap >= self.rag_chunk_size:
             raise ValueError("RAG_CHUNK_OVERLAP must be < RAG_CHUNK_SIZE")
+        if self.bunny_webhook_rate_limit_per_minute <= 0:
+            raise ValueError("BUNNY_WEBHOOK_RATE_LIMIT_PER_MINUTE must be > 0")
         return self
 
 

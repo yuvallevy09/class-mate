@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.router import api_router
+from app.api.webhooks.bunny_stream import router as bunny_webhook_router
 from app.core.settings import get_settings
 from app.db.session import get_db
 
@@ -38,6 +39,10 @@ def create_app() -> FastAPI:
         path = request.url.path
 
         if not s.csrf_enabled:
+            return await call_next(request)
+
+        # Webhooks are CSRF-exempt (third-party callbacks cannot send CSRF headers).
+        if path.startswith("/api/webhooks/"):
             return await call_next(request)
 
         if (method, path) in csrf_allowlist:
@@ -70,6 +75,8 @@ def create_app() -> FastAPI:
         return {"ok": True}
 
     app.include_router(api_router, prefix="/api/v1")
+    # Webhooks are not versioned under /api/v1 by design.
+    app.include_router(bunny_webhook_router)
 
     return app
 

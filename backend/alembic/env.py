@@ -23,6 +23,8 @@ from app.db.models import course as _course_model  # noqa: F401,E402
 from app.db.models import course_content as _course_content_model  # noqa: F401,E402
 from app.db.models import chat_conversation as _chat_conversation_model  # noqa: F401,E402
 from app.db.models import chat_message as _chat_message_model  # noqa: F401,E402
+from app.db.models import video_asset as _video_asset_model  # noqa: F401,E402
+from app.db.models import transcript_segment as _transcript_segment_model  # noqa: F401,E402
 
 # Alembic Config object.
 config = context.config

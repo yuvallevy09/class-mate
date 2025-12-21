@@ -7,6 +7,7 @@ import {
   ChevronRight,
   ChevronDown,
   MessageSquarePlus,
+  Video,
   BookOpen,
   Image,
   PenTool,
@@ -52,6 +53,12 @@ export default function CourseSidebar({
     if (!courseId) return;
     onClose?.();
     navigate(createPageUrl(`CourseChat?id=${courseId}`));
+  };
+
+  const handleOpenVideo = () => {
+    if (!courseId) return;
+    onClose?.();
+    navigate(createPageUrl(`CourseVideo?id=${courseId}`));
   };
 
   const handleOpenConversation = (conversationId) => {
@@ -137,6 +144,24 @@ export default function CourseSidebar({
                       >
                         <MessageSquarePlus className="w-5 h-5 text-purple-400" />
                         <span className="text-sm font-medium">New Chat</span>
+                      </motion.div>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Video */}
+                <div>
+                  <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 px-2">
+                    Video
+                  </h3>
+                  <div className="space-y-2">
+                    <button type="button" onClick={handleOpenVideo} className="w-full">
+                      <motion.div
+                        whileHover={{ x: 4 }}
+                        className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-gray-300 hover:text-white hover:bg-white/5 transition-colors"
+                      >
+                        <Video className="w-5 h-5 text-purple-400" />
+                        <span className="text-sm font-medium">Course Video</span>
                       </motion.div>
                     </button>
                   </div>
