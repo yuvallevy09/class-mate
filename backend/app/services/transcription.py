@@ -56,6 +56,32 @@ def _ffmpeg_extract_audio(*, ffmpeg_bin: str, video_path: Path, wav_path: Path) 
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def _ffmpeg_extract_thumbnail(
+    *,
+    ffmpeg_bin: str,
+    video_path: Path,
+    thumbnail_path: Path,
+    seek_seconds: float = 1.0,
+) -> None:
+    # Best-effort thumbnail extraction: seek a bit into the video and capture one frame.
+    cmd = [
+        ffmpeg_bin,
+        "-y",
+        "-ss",
+        str(seek_seconds),
+        "-i",
+        str(video_path),
+        "-frames:v",
+        "1",
+        "-vf",
+        "scale=640:-2",
+        "-q:v",
+        "3",
+        str(thumbnail_path),
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 class RunpodClient:
     """Minimal Runpod serverless client (submit + poll).
 
@@ -227,6 +253,7 @@ async def transcribe_media_asset(*, media_asset_id: UUID, requested_language: st
                 td_path = Path(td)
                 video_path = td_path / "input.video"
                 wav_path = td_path / "audio.wav"
+                thumb_path = td_path / "thumbnail.jpg"
 
                 # Download video from S3.
                 def _download():
@@ -235,6 +262,38 @@ async def transcribe_media_asset(*, media_asset_id: UUID, requested_language: st
                     video_path.write_bytes(body)
 
                 await asyncio.to_thread(_download)
+
+                # Best-effort thumbnail generation (do not fail the whole job).
+                try:
+                    await asyncio.to_thread(
+                        _ffmpeg_extract_thumbnail,
+                        ffmpeg_bin=settings.ffmpeg_bin,
+                        video_path=video_path,
+                        thumbnail_path=thumb_path,
+                        seek_seconds=float(settings.thumbnail_seek_seconds),
+                    )
+                    if thumb_path.exists() and thumb_path.stat().st_size > 0:
+                        thumb_key = (
+                            asset.thumbnail_file_key
+                            or f"courses/{asset.course_id}/media-assets/{asset.id}/thumbnail.jpg"
+                        )
+
+                        def _upload_thumb():
+                            s3.put_object(
+                                Bucket=settings.s3_bucket,
+                                Key=thumb_key,
+                                Body=thumb_path.read_bytes(),
+                                ContentType="image/jpeg",
+                            )
+
+                        await asyncio.to_thread(_upload_thumb)
+                        asset.thumbnail_file_key = thumb_key
+                        asset.thumbnail_mime_type = "image/jpeg"
+                        asset.thumbnail_generated_at = datetime.now(timezone.utc)
+                        await db.commit()
+                except Exception:
+                    # Ignore thumbnail failures; transcription can still succeed.
+                    pass
 
                 # Extract audio.
                 await asyncio.to_thread(

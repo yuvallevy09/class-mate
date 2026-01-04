@@ -130,7 +130,7 @@ async def test_transcription_pipeline_persists_segments(monkeypatch) -> None:
             assert Bucket == settings.s3_bucket
             assert Key
             assert Body  # bytes
-            assert ContentType == "audio/wav"
+            assert ContentType in {"audio/wav", "image/jpeg"}
             self.put_calls.append({"Bucket": Bucket, "Key": Key})
 
         def generate_presigned_url(self, *, ClientMethod, Params, ExpiresIn):

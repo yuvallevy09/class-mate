@@ -46,6 +46,11 @@ class VideoAsset(Base):
     # Optional: store extracted audio in object storage for retries/debugging.
     audio_file_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
+    # Optional: generated video thumbnail (e.g. first frame) stored in object storage.
+    thumbnail_file_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    thumbnail_mime_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    thumbnail_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Status tracking (store both a stable string and the last numeric webhook status code).
     status: Mapped[str] = mapped_column(String(64), nullable=False, default="queued", index=True)
     last_webhook_status: Mapped[int | None] = mapped_column(Integer, nullable=True)

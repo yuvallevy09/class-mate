@@ -23,6 +23,27 @@ from app.services.transcription import transcribe_media_asset
 router = APIRouter(tags=["media-assets"])
 
 
+def _s3_client(settings: Settings):
+    import boto3
+
+    kwargs: dict = {"service_name": "s3", "region_name": settings.s3_region}
+    if settings.s3_endpoint_url:
+        kwargs["endpoint_url"] = settings.s3_endpoint_url
+    if settings.s3_access_key_id and settings.s3_secret_access_key:
+        kwargs["aws_access_key_id"] = settings.s3_access_key_id
+        kwargs["aws_secret_access_key"] = settings.s3_secret_access_key
+    return boto3.client(**kwargs)
+
+
+def _presign_thumbnail_url(settings: Settings, *, key: str) -> str:
+    s3 = _s3_client(settings)
+    return s3.generate_presigned_url(
+        ClientMethod="get_object",
+        Params={"Bucket": settings.s3_bucket, "Key": key},
+        ExpiresIn=int(settings.s3_download_expires_seconds),
+    )
+
+
 async def _get_owned_course(db: AsyncSession, *, course_id: UUID, user_id: int) -> Course:
     res = await db.execute(select(Course).where(Course.id == course_id, Course.user_id == user_id))
     course = res.scalar_one_or_none()
@@ -54,6 +75,7 @@ async def list_media_assets(
     course_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
 ) -> list[VideoAsset]:
     await _get_owned_course(db, course_id=course_id, user_id=current_user.id)
 
@@ -62,7 +84,18 @@ async def list_media_assets(
         .where(VideoAsset.course_id == course_id)
         .order_by(VideoAsset.created_at.desc())
     )
-    return list(res.scalars().all())
+    assets = list(res.scalars().all())
+    out: list[MediaAssetPublic] = []
+    for a in assets:
+        # Build response model explicitly so we can include thumbnail_url.
+        item = MediaAssetPublic.model_validate(a)
+        if a.thumbnail_file_key and settings.s3_bucket:
+            try:
+                item.thumbnail_url = _presign_thumbnail_url(settings, key=a.thumbnail_file_key)
+            except Exception:
+                item.thumbnail_url = None
+        out.append(item)
+    return out
 
 
 @router.post("/courses/{course_id}/media-assets", response_model=MediaAssetPublic)
@@ -125,6 +158,7 @@ async def get_media_asset(
     media_asset_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
 ) -> VideoAsset:
     res = await db.execute(
         select(VideoAsset, Course)
@@ -134,7 +168,14 @@ async def get_media_asset(
     row = res.first()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media asset not found")
-    return row[0]
+    a: VideoAsset = row[0]
+    item = MediaAssetPublic.model_validate(a)
+    if a.thumbnail_file_key and settings.s3_bucket:
+        try:
+            item.thumbnail_url = _presign_thumbnail_url(settings, key=a.thumbnail_file_key)
+        except Exception:
+            item.thumbnail_url = None
+    return item
 
 
 class StartTranscriptionRequest(BaseModel):

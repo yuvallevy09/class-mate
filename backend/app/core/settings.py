@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     # ffmpeg
     ffmpeg_bin: str = Field(default="ffmpeg", validation_alias="FFMPEG_BIN")
 
+    # Thumbnail generation (ffmpeg)
+    thumbnail_seek_seconds: float = Field(default=1.0, validation_alias="THUMBNAIL_SEEK_SECONDS")
+
     # Runpod (serverless endpoint)
     runpod_api_key: str | None = Field(default=None, validation_alias="RUNPOD_API_KEY")
     runpod_endpoint_id: str | None = Field(default=None, validation_alias="RUNPOD_ENDPOINT_ID")
@@ -101,6 +104,8 @@ class Settings(BaseSettings):
             raise ValueError("RUNPOD_POLL_INTERVAL_SECONDS must be > 0")
         if self.runpod_timeout_seconds <= 0:
             raise ValueError("RUNPOD_TIMEOUT_SECONDS must be > 0")
+        if self.thumbnail_seek_seconds < 0:
+            raise ValueError("THUMBNAIL_SEEK_SECONDS must be >= 0")
         return self
 
 

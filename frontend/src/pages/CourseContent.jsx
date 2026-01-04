@@ -1,7 +1,8 @@
 import React, { useState } from "react";
 import { getCourse } from "@/api/courses";
 import { listCourseContents, createCourseContent, deleteCourseContent, getDownloadUrl } from "@/api/courseContents";
-import { presignUpload } from "@/api/uploads";
+import { presignUpload, putWithProgress } from "@/api/uploads";
+import { listMediaAssets, createMediaAsset, startTranscription } from "@/api/mediaAssets";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
@@ -14,6 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Progress } from "@/components/ui/progress";
 import Navbar from "@/components/Navbar";
 import CourseSidebar from "@/components/CourseSidebar";
 
@@ -45,6 +47,8 @@ export default function CourseContent() {
   const [searchQuery, setSearchQuery] = useState("");
   const [viewMode, setViewMode] = useState("grid");
   const [newContent, setNewContent] = useState({ title: "", description: "", file: null });
+  const [pendingUploads, setPendingUploads] = useState([]);
+  const [videoPreviews, setVideoPreviews] = useState({});
   
   const queryClient = useQueryClient();
 
@@ -60,24 +64,77 @@ export default function CourseContent() {
     enabled: !!courseId && !!category
   });
 
+  const { data: mediaAssets = [] } = useQuery({
+    queryKey: ["mediaAssets", courseId],
+    queryFn: () => listMediaAssets(courseId),
+    enabled: !!courseId && category === "media",
+    refetchInterval: (query) => {
+      if (category !== "media") return false;
+      const assets = Array.isArray(query?.state?.data) ? query.state.data : [];
+      const hasBackendProcessing = assets.some((a) => ["queued", "processing"].includes(String(a?.status || "").toLowerCase()));
+      const hasPending = pendingUploads.some((p) => ["uploading", "processing"].includes(p.stage));
+      return (hasBackendProcessing || hasPending) ? 2000 : false;
+    },
+  });
+
+  const isVideoFile = (file) => String(file?.type || "").toLowerCase().startsWith("video/");
+
+  const createTempId = () =>
+    `tmp_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
   const createContentMutation = useMutation({
     mutationFn: async (contentData) => {
       if (contentData.file) {
         setIsUploading(true);
-        const presign = await presignUpload({ courseId, file: contentData.file });
-        const putRes = await fetch(presign.uploadUrl, {
-          method: presign.method || "PUT",
-          headers: {
-            "Content-Type": contentData.file.type || "application/octet-stream",
-          },
-          body: contentData.file,
-        });
-        if (!putRes.ok) {
-          const text = await putRes.text().catch(() => "");
-          throw new Error(`Upload failed (${putRes.status}): ${text}`);
+        const isVideo = category === "media" && isVideoFile(contentData.file);
+        const tempId = isVideo ? createTempId() : null;
+        const previewUrl = isVideo ? URL.createObjectURL(contentData.file) : null;
+        if (isVideo) {
+          setPendingUploads((prev) => [
+            ...prev,
+            {
+              tempId,
+              title: contentData.title,
+              description: contentData.description,
+              mime_type: contentData.file.type || "video/*",
+              stage: "uploading",
+              progress: 0,
+              previewUrl,
+            },
+          ]);
         }
 
-        await createCourseContent(courseId, {
+        const presign = await presignUpload({ courseId, file: contentData.file });
+        if ((presign.method || "PUT").toUpperCase() !== "PUT") {
+          throw new Error(`Unsupported presign method: ${presign.method}`);
+        }
+
+        if (isVideo) {
+          await putWithProgress({
+            url: presign.uploadUrl,
+            file: contentData.file,
+            contentType: contentData.file.type || "application/octet-stream",
+            onProgress: (pct) => {
+              setPendingUploads((prev) =>
+                prev.map((p) => (p.tempId === tempId ? { ...p, progress: pct } : p))
+              );
+            },
+          });
+        } else {
+          const putRes = await fetch(presign.uploadUrl, {
+            method: "PUT",
+            headers: {
+              "Content-Type": contentData.file.type || "application/octet-stream",
+            },
+            body: contentData.file,
+          });
+          if (!putRes.ok) {
+            const text = await putRes.text().catch(() => "");
+            throw new Error(`Upload failed (${putRes.status}): ${text}`);
+          }
+        }
+
+        const created = await createCourseContent(courseId, {
           category,
           title: contentData.title,
           description: contentData.description,
@@ -86,6 +143,28 @@ export default function CourseContent() {
           mime_type: contentData.file.type || "application/octet-stream",
           size_bytes: contentData.file.size ?? null,
         });
+
+        if (isVideo) {
+          // Move optimistic card to "processing" state linked to persisted content id.
+          setPendingUploads((prev) =>
+            prev.map((p) => (p.tempId === tempId ? { ...p, stage: "processing", progress: 100, contentId: created?.id } : p))
+          );
+          if (created?.id && previewUrl) {
+            setVideoPreviews((prev) => ({ ...prev, [created.id]: previewUrl }));
+          }
+
+          // Hidden backend steps: create media asset + start transcription.
+          const asset = await createMediaAsset(courseId, {
+            file_key: presign.key,
+            original_filename: contentData.file.name,
+            mime_type: contentData.file.type || "application/octet-stream",
+            size_bytes: contentData.file.size ?? null,
+            content_id: created?.id ?? null,
+          });
+          if (asset?.id) {
+            await startTranscription(asset.id);
+          }
+        }
         return;
       }
 
@@ -97,11 +176,18 @@ export default function CourseContent() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['content', courseId, category] });
+      if (category === "media") {
+        queryClient.invalidateQueries({ queryKey: ["mediaAssets", courseId] });
+      }
       setIsAddDialogOpen(false);
       setNewContent({ title: "", description: "", file: null });
       setIsUploading(false);
     },
-    onError: () => {
+    onError: (e) => {
+      // Mark any uploading optimistic cards as error.
+      setPendingUploads((prev) =>
+        prev.map((p) => (p.stage === "uploading" ? { ...p, stage: "error", error: String(e?.message || e || "Upload failed") } : p))
+      );
       setIsUploading(false);
     }
   });
@@ -146,6 +232,13 @@ export default function CourseContent() {
   const filteredContent = content.filter(item =>
     item.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     item.description?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const contentIds = new Set((Array.isArray(content) ? content : []).map((c) => c?.id));
+  const pendingVisible = pendingUploads.filter((p) => !p.contentId || !contentIds.has(p.contentId));
+  const filteredPending = pendingVisible.filter((p) =>
+    String(p?.title || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+    String(p?.description || "").toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   return (
@@ -249,8 +342,75 @@ export default function CourseContent() {
               className={viewMode === "grid" ? "grid md:grid-cols-2 lg:grid-cols-3 gap-6" : "space-y-4"}
             >
               <AnimatePresence>
+                {category === "media" && filteredPending.map((p, index) => {
+                  const faded = p.stage === "uploading" || p.stage === "processing";
+                  const previewUrl = p.previewUrl;
+                  return (
+                    <motion.div
+                      key={p.tempId}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.95 }}
+                      transition={{ delay: index * 0.02 }}
+                      className={`glass-card rounded-2xl p-6 group relative ${faded ? "opacity-60" : ""}`}
+                    >
+                      <div className={viewMode === "grid" ? "" : "flex items-start gap-4"}>
+                        <div className={`${viewMode === "grid" ? "w-12 h-12 mb-5" : "w-12 h-12"} rounded-xl bg-gradient-to-br from-pink-500/20 via-purple-500/20 to-blue-500/20 flex items-center justify-center shrink-0`}>
+                          <Video className="w-6 h-6 text-purple-400" />
+                        </div>
+                        <div className="flex-1">
+                          {previewUrl && (
+                            <video
+                              src={previewUrl}
+                              muted
+                              playsInline
+                              preload="metadata"
+                              className="w-full h-28 object-cover rounded-xl mb-3 border border-white/10"
+                            />
+                          )}
+                          <h3 className="font-semibold mb-2 pr-8">{p.title}</h3>
+                          {p.description && (
+                            <p className="text-sm text-gray-400 line-clamp-2 mb-3">
+                              {p.description}
+                            </p>
+                          )}
+
+                          {p.stage === "uploading" && (
+                            <div className="space-y-2">
+                              <div className="text-xs text-gray-400">Uploading… {p.progress}%</div>
+                              <Progress value={p.progress || 0} className="h-2 bg-white/10" />
+                            </div>
+                          )}
+                          {p.stage === "processing" && (
+                            <div className="space-y-2">
+                              <div className="text-xs text-gray-400">Processing…</div>
+                              <div className="animate-pulse">
+                                <Progress value={100} className="h-2 bg-white/10" />
+                              </div>
+                            </div>
+                          )}
+                          {p.stage === "error" && (
+                            <div className="text-xs text-red-400">
+                              Failed: {p.error || "Upload failed"}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </motion.div>
+                  );
+                })}
+
                 {filteredContent.map((item, index) => {
                   const IconComponent = getFileIcon(item.mime_type);
+                  const isVideo = category === "media" && String(item?.mime_type || "").toLowerCase().startsWith("video/");
+                  const asset = isVideo
+                    ? mediaAssets.find((a) => a?.content_id === item?.id)
+                    : null;
+                  const status = String(asset?.status || "").toLowerCase();
+                  const isProcessing = isVideo && asset && ["queued", "processing"].includes(status);
+                  const isError = isVideo && asset && status === "error";
+                  const previewUrl = isVideo ? videoPreviews[item.id] : null;
+                  const thumbUrl = isVideo ? asset?.thumbnail_url : null;
                   return (
                     <motion.div
                       key={item.id}
@@ -259,7 +419,7 @@ export default function CourseContent() {
                       exit={{ opacity: 0, scale: 0.9 }}
                       transition={{ delay: index * 0.05 }}
                       whileHover={{ y: -3 }}
-                      className="glass-card rounded-2xl p-6 group relative"
+                      className={`glass-card rounded-2xl p-6 group relative ${isProcessing ? "opacity-70" : ""}`}
                     >
                       <Button
                         variant="ghost"
@@ -271,9 +431,30 @@ export default function CourseContent() {
                       </Button>
                       
                       <div className={viewMode === "grid" ? "" : "flex items-start gap-4"}>
-                        <div className={`${viewMode === "grid" ? "w-12 h-12 mb-5" : "w-12 h-12"} rounded-xl bg-gradient-to-br from-pink-500/20 via-purple-500/20 to-blue-500/20 flex items-center justify-center shrink-0`}>
-                          <IconComponent className="w-6 h-6 text-purple-400" />
-                        </div>
+                        {isVideo && (thumbUrl || previewUrl) ? (
+                          <div className={`${viewMode === "grid" ? "mb-4" : "w-40"} shrink-0`}>
+                            {thumbUrl ? (
+                              <img
+                                src={thumbUrl}
+                                alt={`${item.title} thumbnail`}
+                                className={`${viewMode === "grid" ? "w-full h-28" : "w-40 h-24"} object-cover rounded-xl border border-white/10`}
+                                loading="lazy"
+                              />
+                            ) : (
+                              <video
+                                src={previewUrl}
+                                muted
+                                playsInline
+                                preload="metadata"
+                                className={`${viewMode === "grid" ? "w-full h-28" : "w-40 h-24"} object-cover rounded-xl border border-white/10`}
+                              />
+                            )}
+                          </div>
+                        ) : (
+                          <div className={`${viewMode === "grid" ? "w-12 h-12 mb-5" : "w-12 h-12"} rounded-xl bg-gradient-to-br from-pink-500/20 via-purple-500/20 to-blue-500/20 flex items-center justify-center shrink-0`}>
+                            <IconComponent className="w-6 h-6 text-purple-400" />
+                          </div>
+                        )}
                         
                         <div className="flex-1">
                           <h3 className="font-semibold mb-2 pr-8">{item.title}</h3>
@@ -284,6 +465,20 @@ export default function CourseContent() {
                             </p>
                           )}
                           
+                          {isVideo && isProcessing && (
+                            <div className="space-y-2 mb-3">
+                              <div className="text-xs text-gray-400">Processing…</div>
+                              <div className="animate-pulse">
+                                <Progress value={100} className="h-2 bg-white/10" />
+                              </div>
+                            </div>
+                          )}
+                          {isVideo && isError && (
+                            <div className="text-xs text-red-400 mb-3">
+                              Transcription failed: {asset?.transcription_error || "Unknown error"}
+                            </div>
+                          )}
+
                           {item.file_key && (
                             <button
                               type="button"

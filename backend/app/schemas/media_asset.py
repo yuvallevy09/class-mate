@@ -35,6 +35,10 @@ class MediaAssetPublic(BaseModel):
     mime_type: str | None
     size_bytes: int | None
     audio_file_key: str | None
+    thumbnail_file_key: str | None
+    thumbnail_mime_type: str | None
+    thumbnail_generated_at: datetime | None
+    thumbnail_url: str | None = None
 
     # Legacy (optional now)
     video_library_id: int | None
