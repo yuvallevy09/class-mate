@@ -705,6 +705,124 @@
         "title": "SignupResponse",
         "type": "object"
       },
+      "StartTranscriptionRequest": {
+        "properties": {
+          "language_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language Code"
+          }
+        },
+        "title": "StartTranscriptionRequest",
+        "type": "object"
+      },
+      "StartTranscriptionResponse": {
+        "properties": {
+          "media_asset_id": {
+            "format": "uuid",
+            "title": "Media Asset Id",
+            "type": "string"
+          },
+          "ok": {
+            "default": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "media_asset_id",
+          "status"
+        ],
+        "title": "StartTranscriptionResponse",
+        "type": "object"
+      },
+      "TranscriptSegmentPublic": {
+        "properties": {
+          "chapter_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chapter Id"
+          },
+          "chapter_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chapter Title"
+          },
+          "course_id": {
+            "format": "uuid",
+            "title": "Course Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "end_sec": {
+            "title": "End Sec",
+            "type": "number"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "language_code": {
+            "title": "Language Code",
+            "type": "string"
+          },
+          "start_sec": {
+            "title": "Start Sec",
+            "type": "number"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "video_asset_id": {
+            "format": "uuid",
+            "title": "Video Asset Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "course_id",
+          "video_asset_id",
+          "chapter_id",
+          "chapter_title",
+          "start_sec",
+          "end_sec",
+          "text",
+          "language_code",
+          "created_at"
+        ],
+        "title": "TranscriptSegmentPublic",
+        "type": "object"
+      },
       "UserPublic": {
         "properties": {
           "created_at": {
@@ -1411,6 +1529,122 @@
           }
         },
         "summary": "Get Media Asset",
+        "tags": [
+          "media-assets"
+        ]
+      }
+    },
+    "/api/v1/media-assets/{media_asset_id}/segments": {
+      "get": {
+        "operationId": "list_transcript_segments_api_v1_media_assets__media_asset_id__segments_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "media_asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Media Asset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "language_code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Language Code"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TranscriptSegmentPublic"
+                  },
+                  "title": "Response List Transcript Segments Api V1 Media Assets  Media Asset Id  Segments Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Transcript Segments",
+        "tags": [
+          "media-assets"
+        ]
+      }
+    },
+    "/api/v1/media-assets/{media_asset_id}/transcribe": {
+      "post": {
+        "operationId": "start_transcription_api_v1_media_assets__media_asset_id__transcribe_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "media_asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Media Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartTranscriptionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartTranscriptionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Transcription",
         "tags": [
           "media-assets"
         ]

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,10 +12,13 @@ from app.api.deps import get_current_user
 from app.core.settings import Settings, get_settings
 from app.db.models.course import Course
 from app.db.models.course_content import CourseContent
+from app.db.models.transcript_segment import TranscriptSegment
 from app.db.models.user import User
 from app.db.models.video_asset import VideoAsset
 from app.db.session import get_db
 from app.schemas.media_asset import MediaAssetCreate, MediaAssetPublic
+from app.schemas.transcript_segment import TranscriptSegmentPublic
+from app.services.transcription import transcribe_media_asset
 
 router = APIRouter(tags=["media-assets"])
 
@@ -130,5 +135,88 @@ async def get_media_asset(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media asset not found")
     return row[0]
+
+
+class StartTranscriptionRequest(BaseModel):
+    language_code: str | None = None
+
+
+class StartTranscriptionResponse(BaseModel):
+    ok: bool = True
+    media_asset_id: UUID
+    status: str
+
+
+@router.post("/media-assets/{media_asset_id}/transcribe", response_model=StartTranscriptionResponse)
+async def start_transcription(
+    media_asset_id: UUID,
+    body: StartTranscriptionRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+) -> StartTranscriptionResponse:
+    if not settings.runpod_api_key or not settings.runpod_endpoint_id:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Runpod is not configured (RUNPOD_API_KEY/RUNPOD_ENDPOINT_ID missing)",
+        )
+
+    res = await db.execute(
+        select(VideoAsset, Course)
+        .join(Course, Course.id == VideoAsset.course_id)
+        .where(VideoAsset.id == media_asset_id, Course.user_id == current_user.id)
+    )
+    row = res.first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media asset not found")
+
+    asset: VideoAsset = row[0]
+    if asset.provider != "local":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only local media assets are supported")
+    if not asset.source_file_key:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Media asset missing source_file_key")
+
+    if asset.status in {"processing"}:
+        return StartTranscriptionResponse(media_asset_id=asset.id, status=asset.status)
+
+    # Mark as queued/processing and schedule background work.
+    asset.status = "processing"
+    asset.transcription_error = None
+    asset.transcription_started_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    background_tasks.add_task(
+        transcribe_media_asset,
+        media_asset_id=asset.id,
+        requested_language=(body.language_code or None),
+    )
+    return StartTranscriptionResponse(media_asset_id=asset.id, status=asset.status)
+
+
+@router.get("/media-assets/{media_asset_id}/segments", response_model=list[TranscriptSegmentPublic])
+async def list_transcript_segments(
+    media_asset_id: UUID,
+    language_code: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[TranscriptSegment]:
+    # Ownership check via join.
+    res = await db.execute(
+        select(VideoAsset, Course)
+        .join(Course, Course.id == VideoAsset.course_id)
+        .where(VideoAsset.id == media_asset_id, Course.user_id == current_user.id)
+    )
+    row = res.first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media asset not found")
+    asset: VideoAsset = row[0]
+
+    stmt = select(TranscriptSegment).where(TranscriptSegment.video_asset_id == asset.id)
+    if language_code:
+        stmt = stmt.where(TranscriptSegment.language_code == language_code)
+    stmt = stmt.order_by(TranscriptSegment.start_sec.asc())
+    seg_res = await db.execute(stmt)
+    return list(seg_res.scalars().all())
 
 
