@@ -27,6 +27,14 @@ class TranscriptSegment(Base):
         index=True,
     )
 
+    # Optional chapter assignment (Smart Chapters / manual import).
+    chapter_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("video_chapters.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    chapter_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     start_sec: Mapped[float] = mapped_column(Float, nullable=False)
     end_sec: Mapped[float] = mapped_column(Float, nullable=False)
 

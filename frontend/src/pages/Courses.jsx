@@ -219,7 +219,7 @@ export default function Courses() {
                     whileHover={{ y: -5, scale: 1.02 }}
                     className="group"
                   >
-                    <Link to={createPageUrl(`CourseChat?id=${course.id}`)}>
+                    <Link to={createPageUrl(`CourseContent?courseId=${course.id}&category=overview`)}>
                       <div className="glass-card rounded-2xl p-6 h-full cursor-pointer hover:border-purple-500/30 transition-all duration-300 hover:neon-glow relative">
                         <Button
                           type="button"

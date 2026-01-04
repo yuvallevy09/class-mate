@@ -21,17 +21,6 @@ Users can create courses, upload and manage lecture slides/PDFs/other resources,
 - **File uploads (S3-compatible, presigned URLs)**:
   - Backend issues **presigned PUT** URLs; browser uploads directly to object storage.
   - Backend can generate **presigned download** links for attached files.
-- **Course chat (course-scoped, persisted)**:
-  - Course chat endpoint: `POST /api/v1/courses/{courseId}/chat`
-  - Backend persists **conversations + messages** in Postgres and exposes:
-    - `GET /api/v1/courses/{courseId}/conversations`
-    - `GET /api/v1/conversations/{conversationId}/messages`
-    - `DELETE /api/v1/conversations/{conversationId}`
-  - Backend generates responses via **Gemini (LangChain)** when `GOOGLE_API_KEY` or `GEMINI_API_KEY` is configured.
-- **RAG (PDF → per-course vector index → citations)**:
-  - File-backed **PDF** course contents are indexed into a persisted per-course **Chroma** store on disk.
-  - Indexing is triggered automatically when you create a content item with an attached file (`POST /courses/{courseId}/contents`), and can also be triggered manually.
-  - Chat uses retrieval **best-effort** (injects retrieved excerpts into the prompt when an index exists) and returns `citations[]` with snippet + metadata (e.g. `original_filename`, `page`, `score`).
 
 ### Security & privacy baseline
 
@@ -55,7 +44,7 @@ This repo uses a simple monorepo layout with two apps:
   - SQLAlchemy (async) + Alembic migrations
   - Postgres for persistence
   - S3-compatible object storage (MinIO in local dev) for uploads
-  - Local-first RAG index persisted to disk (`.rag_store/` by default)
+  - (In progress) new pipeline: local ffmpeg extraction + Runpod transcription + BM25 retrieval + DSPy
 
 ### Request flow (high level)
 
@@ -126,11 +115,7 @@ Configure env:
 - Copy `frontend/env.example` to `frontend/.env.local` (or `frontend/.env`)
 - Set:
   - `VITE_API_URL=http://localhost:3001`
-  - `VITE_CHAT_ENABLED=true` (enables the UI chat input; backend chat requires a Gemini API key)
-
-Configure backend chat keys (optional, only needed for chat replies):
-
-- Set `GOOGLE_API_KEY` (preferred) or `GEMINI_API_KEY` in `backend/.env`
+  - (Optional) any other frontend flags you add as you build the new pipeline
 
 Start the frontend (Vite default port **5173**):
 
@@ -159,40 +144,19 @@ npm run dev:backend
 
 ---
 
-## RAG: indexing and debugging (dev)
+## Note: pipeline in progress
 
-RAG is **per-course** and stores a persisted Chroma index under:
-
-- `backend/.rag_store/users/{userId}/courses/{courseId}/` (by default; configurable via `RAG_STORE_DIR`)
-
-### How indexing works
-
-- **Upload flow**:
-  - Frontend requests a presigned URL: `POST /api/v1/uploads/presign`
-  - Browser uploads directly to S3/MinIO via the presigned `PUT`
-  - Frontend creates the content record with `file_key` + file metadata: `POST /api/v1/courses/{courseId}/contents`
-- **Indexing trigger**: when a content item with `file_key` is created and `RAG_ENABLED=true`, the backend schedules indexing in-process via `BackgroundTasks`.
-- **Currently indexed formats**: PDFs only (text is extracted with `pypdf` and chunked; no OCR).
-
-### Requirements
-
-- **S3 configured** (at minimum `S3_BUCKET`), because indexing fetches the uploaded PDFs from object storage.
-- **Embeddings configured**:
-  - **Gemini embeddings (default)**: set `GOOGLE_API_KEY` or `GEMINI_API_KEY` and ensure quota/billing allows embeddings.
-  - **Local embeddings**: set `RAG_EMBEDDINGS_PROVIDER=hf` (uses `sentence-transformers`, downloads the model on first run).
-
-### Debug endpoints
-
-- `GET /api/v1/courses/{courseId}/rag/status` — sanity info (enabled, index exists, PDF count, etc.)
-- `POST /api/v1/courses/{courseId}/rag/reindex` — rebuild/refresh the index in the background
-- `GET /api/v1/courses/{courseId}/rag/query?q=...&top_k=4` — retrieval-only debug (no LLM)
-- `POST /api/v1/courses/{courseId}/rag/clear` — dev helper: delete the on-disk index for the course
+This repo is being migrated to a new stack:
+- local `ffmpeg` audio extraction
+- Runpod transcription (faster-whisper + whisper-timestamped)
+- BM25 retrieval
+- DSPy for RAG/agents
 
 ---
 
 ## Tests
 
-Backend tests live in `backend/tests/` and cover core flows (auth, courses, chat contract, migrations, validation guards).
+Backend tests live in `backend/tests/` and cover core flows (auth, courses, migrations, validation guards).
 
 ```bash
 cd backend

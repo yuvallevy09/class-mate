@@ -51,3 +51,5 @@ def downgrade() -> None:
     op.drop_index("ix_refresh_sessions_user_id", table_name="refresh_sessions")
     op.drop_table("refresh_sessions")
 
+
+

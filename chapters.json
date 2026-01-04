@@ -1,0 +1,5 @@
+[
+  { "startSec": 0, "endSec": 300, "title": "Intro" },
+  { "startSec": 300, "endSec": 1200, "title": "Core concepts" },
+  { "startSec": 1200, "endSec": 2000, "title": "Matrices / multiplication" }
+]

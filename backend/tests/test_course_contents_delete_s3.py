@@ -148,3 +148,5 @@ async def test_delete_content_deletes_s3_object(monkeypatch) -> None:
     assert calls == [(settings.s3_bucket, content.file_key)]
 
 
+
+

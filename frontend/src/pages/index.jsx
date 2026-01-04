@@ -4,11 +4,7 @@ import Home from "./Home";
 
 import Courses from "./Courses";
 
-import CourseChat from "./CourseChat";
-
 import CourseContent from "./CourseContent";
-
-import CourseVideo from "./CourseVideo";
 
 import Login from "./Login";
 import Signup from "./Signup";
@@ -22,11 +18,7 @@ const PAGES = {
     
     Courses: Courses,
     
-    CourseChat: CourseChat,
-    
     CourseContent: CourseContent,
-
-    CourseVideo: CourseVideo,
 
     Login: Login,
 
@@ -63,11 +55,7 @@ function PagesContent() {
                 
                 <Route path="/Courses" element={<RequireAuth><Courses /></RequireAuth>} />
                 
-                <Route path="/CourseChat" element={<RequireAuth><CourseChat /></RequireAuth>} />
-                
                 <Route path="/CourseContent" element={<RequireAuth><CourseContent /></RequireAuth>} />
-
-                <Route path="/CourseVideo" element={<RequireAuth><CourseVideo /></RequireAuth>} />
 
                 <Route path="/login" element={<Login />} />
                 <Route path="/signup" element={<Signup />} />

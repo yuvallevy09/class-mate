@@ -55,3 +55,5 @@ def downgrade() -> None:
     op.drop_table("course_contents")
 
 
+
+

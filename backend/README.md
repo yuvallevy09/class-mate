@@ -58,4 +58,13 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port ${PORT:-3001}
 - `GET /health`
 - `GET /health/db` (requires Postgres running)
 
+## Note on legacy features
+
+This repo previously included:
+- Bunny Stream video webhook ingestion
+- LangChain + Gemini chat
+- Chroma embedding-based RAG
+
+Those codepaths have been removed to make room for a new pipeline based on local `ffmpeg` audio extraction, Runpod transcription (faster-whisper + whisper-timestamped), BM25 retrieval, and DSPy.
+
 

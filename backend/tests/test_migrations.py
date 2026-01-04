@@ -63,3 +63,5 @@ def test_alembic_upgrade_creates_users_table() -> None:
     assert asyncio.run(_users_table_exists(settings.database_url)) is True
 
 
+
+
