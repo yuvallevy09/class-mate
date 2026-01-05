@@ -16,7 +16,7 @@ from app.rag.paths import course_persist_dir
 
 async def index_video_asset_segments(*, video_asset_id: UUID) -> None:
     """
-    Upsert Bunny transcript segments into the per-course persisted Chroma collection.
+    Upsert transcript segments into the per-course persisted Chroma collection.
 
     This is best-effort:
     - If embeddings aren't configured, it no-ops (DB remains the source of truth).
@@ -83,7 +83,6 @@ async def index_video_asset_segments(*, video_asset_id: UUID) -> None:
             "doc_type": "segment",
             "course_id": str(seg.course_id),
             "video_asset_id": str(seg.video_asset_id),
-            "video_guid": str(asset.video_guid),
             "start_sec": float(seg.start_sec),
             "end_sec": float(seg.end_sec),
             "language_code": str(seg.language_code),

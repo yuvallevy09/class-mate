@@ -62,7 +62,6 @@ def retrieve_course_hits(
             [
                 str(meta.get("doc_type") or ""),
                 str(meta.get("content_id") or ""),
-                str(meta.get("video_guid") or ""),
                 str(meta.get("video_asset_id") or ""),
                 str(meta.get("start_sec") or ""),
                 str(meta.get("end_sec") or ""),

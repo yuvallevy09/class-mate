@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -28,23 +28,21 @@ class VideoAsset(Base):
         index=True,
     )
 
-    # Provider is intentionally generic; Bunny ingestion has been removed.
+    # Provider is intentionally generic. Ingestion v2 uses local uploads (S3/MinIO).
     provider: Mapped[str] = mapped_column(String(32), nullable=False, default="local", index=True)
 
-    # Bunny-specific identifiers.
-    video_library_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    video_guid: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    pull_zone_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Upload metadata (REQUIRED).
+    source_file_key: Mapped[str] = mapped_column(String(1024), nullable=False, index=True)
+    original_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
-    # Status tracking (store both a stable string and the last numeric webhook status code).
-    status: Mapped[str] = mapped_column(String(64), nullable=False, default="queued", index=True)
-    last_webhook_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    last_webhook_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    captions_language_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    captions_vtt_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    captions_ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
+    # Transcription state (PR3 will populate these).
+    status: Mapped[str] = mapped_column(String(64), nullable=False, default="uploaded", index=True)
+    transcription_job_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    transcription_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    transcription_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    transcription_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     transcript_ingested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(

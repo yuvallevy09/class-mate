@@ -226,7 +226,6 @@ async def rag_query(
                     "original_filename": meta.get("original_filename"),
                     "page": meta.get("page"),
                     "doc_type": meta.get("doc_type"),
-                    "video_guid": meta.get("video_guid"),
                     "video_asset_id": meta.get("video_asset_id"),
                     "start_sec": meta.get("start_sec"),
                     "end_sec": meta.get("end_sec"),

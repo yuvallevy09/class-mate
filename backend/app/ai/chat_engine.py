@@ -74,14 +74,14 @@ class ChatEngine:
                 src.append(str(meta["original_filename"]))
             if meta.get("page"):
                 src.append(f"p.{meta['page']}")
-            if meta.get("video_guid"):
-                # Video transcript segment
+            if meta.get("video_asset_id"):
+                # Video transcript segment (video asset)
                 try:
                     start = float(meta.get("start_sec") or 0.0)
                     end = float(meta.get("end_sec") or 0.0)
-                    src.append(f"video:{meta['video_guid']} {start:.0f}s→{end:.0f}s")
+                    src.append(f"video_asset:{meta['video_asset_id']} {start:.0f}s→{end:.0f}s")
                 except Exception:
-                    src.append(f"video:{meta['video_guid']}")
+                    src.append(f"video_asset:{meta['video_asset_id']}")
             if meta.get("chapter_title"):
                 src.append(f"chapter:{meta['chapter_title']}")
             if src:
@@ -104,11 +104,10 @@ class ChatEngine:
                 "score": hit.score,
                 "doc_type": meta.get("doc_type"),
             }
-            if meta.get("video_guid"):
+            if meta.get("video_asset_id"):
                 extra.update(
                     {
                         "type": "video",
-                        "videoGuid": meta.get("video_guid"),
                         "videoAssetId": meta.get("video_asset_id"),
                         "startSec": meta.get("start_sec"),
                         "endSec": meta.get("end_sec"),

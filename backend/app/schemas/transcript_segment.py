@@ -13,9 +13,6 @@ class TranscriptSegmentPublic(BaseModel):
     course_id: UUID
     video_asset_id: UUID
 
-    chapter_id: UUID | None
-    chapter_title: str | None
-
     start_sec: float
     end_sec: float
     text: str

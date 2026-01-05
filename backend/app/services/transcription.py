@@ -276,7 +276,7 @@ async def transcribe_media_asset(*, media_asset_id: UUID, requested_language: st
                     if thumb_path.exists() and thumb_path.stat().st_size > 0:
                         thumb_key = (
                             asset.thumbnail_file_key
-                            or f"courses/{asset.course_id}/media-assets/{asset.id}/thumbnail.jpg"
+                            or f"courses/{asset.course_id}/video-assets/{asset.id}/thumbnail.jpg"
                         )
 
                         def _upload_thumb():
@@ -305,7 +305,7 @@ async def transcribe_media_asset(*, media_asset_id: UUID, requested_language: st
                 )
 
                 # Upload audio to S3 so Runpod can fetch it.
-                audio_key = asset.audio_file_key or f"courses/{asset.course_id}/media-assets/{asset.id}/audio.wav"
+                audio_key = asset.audio_file_key or f"courses/{asset.course_id}/video-assets/{asset.id}/audio.wav"
 
                 def _upload_audio():
                     s3.put_object(

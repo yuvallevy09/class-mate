@@ -66,7 +66,7 @@ async def _create_course(database_url: str, *, user_id: int, name: str) -> Cours
 
 
 @pytest.mark.asyncio
-async def test_media_assets_auth_and_ownership(monkeypatch) -> None:
+async def test_video_assets_auth_and_ownership(monkeypatch) -> None:
     # Ensure settings pick up S3_BUCKET for this test.
     monkeypatch.setenv("S3_BUCKET", "classmate")
     get_settings.cache_clear()
@@ -92,7 +92,7 @@ async def test_media_assets_auth_and_ownership(monkeypatch) -> None:
 
     # Unauthenticated should be rejected.
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as anon:
-        r = await anon.get(f"/api/v1/courses/{course_a.id}/media-assets")
+        r = await anon.get(f"/api/v1/courses/{course_a.id}/video-assets")
         assert r.status_code == 401
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -108,9 +108,9 @@ async def test_media_assets_auth_and_ownership(monkeypatch) -> None:
 
         # CSRF required for create.
         missing_csrf_create = await client.post(
-            f"/api/v1/courses/{course_a.id}/media-assets",
+            f"/api/v1/courses/{course_a.id}/video-assets",
             json={
-                "file_key": f"users/{user_a.id}/courses/{course_a.id}/{uuid4()}_video.mp4",
+                "source_file_key": f"users/{user_a.id}/courses/{course_a.id}/{uuid4()}_video.mp4",
                 "original_filename": "video.mp4",
                 "mime_type": "video/mp4",
                 "size_bytes": 123,
@@ -119,9 +119,9 @@ async def test_media_assets_auth_and_ownership(monkeypatch) -> None:
         assert missing_csrf_create.status_code == 403
 
         created = await client.post(
-            f"/api/v1/courses/{course_a.id}/media-assets",
+            f"/api/v1/courses/{course_a.id}/video-assets",
             json={
-                "file_key": f"users/{user_a.id}/courses/{course_a.id}/{uuid4()}_video.mp4",
+                "source_file_key": f"users/{user_a.id}/courses/{course_a.id}/{uuid4()}_video.mp4",
                 "original_filename": "video.mp4",
                 "mime_type": "video/mp4",
                 "size_bytes": 123,
@@ -132,24 +132,24 @@ async def test_media_assets_auth_and_ownership(monkeypatch) -> None:
         asset = created.json()
         assert asset["course_id"] == str(course_a.id)
         assert asset["provider"] == "local"
-        assert asset["status"] == "queued"
+        assert asset["status"] == "uploaded"
         assert asset["source_file_key"].startswith(f"users/{user_a.id}/")
 
-        listed = await client.get(f"/api/v1/courses/{course_a.id}/media-assets")
+        listed = await client.get(f"/api/v1/courses/{course_a.id}/video-assets")
         assert listed.status_code == 200
         items = listed.json()
         assert any(i["id"] == asset["id"] for i in items)
 
-        got = await client.get(f"/api/v1/media-assets/{asset['id']}")
+        got = await client.get(f"/api/v1/video-assets/{asset['id']}")
         assert got.status_code == 200
         assert got.json()["id"] == asset["id"]
 
         # User A must not be able to list B's assets (404 course not found under ownership).
-        forbidden_list = await client.get(f"/api/v1/courses/{course_b.id}/media-assets")
+        forbidden_list = await client.get(f"/api/v1/courses/{course_b.id}/video-assets")
         assert forbidden_list.status_code == 404
 
         # User A must not be able to fetch a random UUID.
-        missing = await client.get(f"/api/v1/media-assets/{uuid4()}")
+        missing = await client.get(f"/api/v1/video-assets/{uuid4()}")
         assert missing.status_code == 404
 
 
