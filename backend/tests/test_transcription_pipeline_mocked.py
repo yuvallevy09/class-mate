@@ -207,3 +207,71 @@ async def test_transcription_pipeline_persists_segments(monkeypatch) -> None:
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_transcription_pipeline_errors_on_empty_segments(monkeypatch) -> None:
+    monkeypatch.setenv("S3_BUCKET", "classmate")
+    monkeypatch.setenv("RUNPOD_API_KEY", "test")
+    monkeypatch.setenv("RUNPOD_ENDPOINT_ID", "endpoint")
+    get_settings.cache_clear()
+    settings = get_settings()
+
+    if not await _can_connect(settings.database_url):
+        pytest.skip("Database not reachable. Start Postgres (backend/docker-compose.yml).")
+
+    await asyncio.to_thread(_run_migrations_sync)
+
+    user = await _create_user(settings.database_url, email=f"u-{uuid4()}@e.com", password="pw")
+    course = await _create_course(settings.database_url, user_id=user.id, name="Course")
+    asset = await _create_video_asset(
+        settings.database_url, course_id=course.id, source_key=f"users/{user.id}/courses/{course.id}/x.mp4"
+    )
+
+    class _StubS3:
+        def download_fileobj(self, bucket, key, fileobj):
+            fileobj.write(b"fake-video")
+
+        def upload_fileobj(self, fileobj, bucket, key, ExtraArgs=None):
+            assert ExtraArgs and ExtraArgs.get("ContentType") == "audio/wav"
+
+        def generate_presigned_url(self, *, ClientMethod, Params, ExpiresIn):
+            return f"https://public-s3.example.test/{Params['Bucket']}/{Params['Key']}"
+
+    monkeypatch.setattr(svc, "_s3_client", lambda _settings: _StubS3())
+
+    def _fake_ffmpeg_extract_audio(*, ffmpeg_bin: str, video_path: Path, wav_path: Path) -> None:
+        wav_path.write_bytes(b"RIFF....WAVEfmt ")
+
+    monkeypatch.setattr(svc, "_ffmpeg_extract_audio", _fake_ffmpeg_extract_audio)
+
+    class _StubRunpodEmpty:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        @staticmethod
+        def extract_job_id(payload: dict) -> str:
+            return str(payload.get("id") or "job-unknown")
+
+        async def submit_audio_url(self, *, audio_url: str, language=None, model=None, extra_input=None):
+            return {"id": "job-2", "status": "COMPLETED", "output": {"language": "en", "segments": []}}
+
+    monkeypatch.setattr(svc, "RunpodClient", _StubRunpodEmpty)
+
+    await svc.transcribe_video_asset(video_asset_id=asset.id, requested_language=None)
+
+    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+    SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with SessionLocal() as session:
+            a = (await session.execute(select(VideoAsset).where(VideoAsset.id == asset.id))).scalar_one()
+            assert a.status == "error"
+            assert a.transcription_error is not None
+            segs = (
+                await session.execute(
+                    select(TranscriptSegment).where(TranscriptSegment.video_asset_id == asset.id)
+                )
+            ).scalars().all()
+            assert segs == []
+    finally:
+        await engine.dispose()
+
+

@@ -4,7 +4,9 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -20,6 +22,10 @@ from app.schemas.video_asset import VideoAssetCreate, VideoAssetPublic
 from app.services.transcription import transcribe_video_asset
 
 router = APIRouter(tags=["video-assets"])
+
+class TranscribeRequest(BaseModel):
+    language_code: str | None = Field(default=None, max_length=16)
+    force: bool = False
 
 
 async def _get_owned_course(db: AsyncSession, *, course_id: UUID, user_id: int) -> Course:
@@ -97,6 +103,14 @@ async def create_video_asset(
         )
         content_id = body.content_id
 
+    # Idempotency: if this source_file_key is already registered for the course, return it.
+    existing_res = await db.execute(
+        select(VideoAsset).where(VideoAsset.course_id == course_id, VideoAsset.source_file_key == file_key)
+    )
+    existing = existing_res.scalar_one_or_none()
+    if existing is not None:
+        return existing
+
     asset = VideoAsset(
         course_id=course_id,
         content_id=content_id,
@@ -108,9 +122,20 @@ async def create_video_asset(
         size_bytes=body.size_bytes,
     )
     db.add(asset)
-    await db.commit()
-    await db.refresh(asset)
-    return asset
+    try:
+        await db.commit()
+        await db.refresh(asset)
+        return asset
+    except IntegrityError:
+        # Race-safe idempotency: another request may have inserted the same unique key.
+        await db.rollback()
+        existing_res = await db.execute(
+            select(VideoAsset).where(VideoAsset.course_id == course_id, VideoAsset.source_file_key == file_key)
+        )
+        existing = existing_res.scalar_one_or_none()
+        if existing is not None:
+            return existing
+        raise
 
 
 @router.get("/video-assets/{video_asset_id}", response_model=VideoAssetPublic)
@@ -159,6 +184,7 @@ async def list_video_asset_segments(
 async def start_transcription_stub(
     video_asset_id: UUID,
     background_tasks: BackgroundTasks,
+    body: TranscribeRequest | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
@@ -188,23 +214,39 @@ async def start_transcription_stub(
         )
 
     # PR3.2: update DB state and enqueue background work (actual pipeline comes in PR3.3+).
-    if asset.status in {"processing", "done"}:
+    requested_language = None
+    force = False
+    if body is not None:
+        requested_language = (body.language_code or "").strip() or None
+        force = bool(body.force)
+
+    if asset.status in {"processing", "extracting_audio", "transcribing"}:
+        return {"ok": True, "video_asset_id": str(asset.id), "status": asset.status}
+    if asset.status == "done" and not force:
         return {"ok": True, "video_asset_id": str(asset.id), "status": asset.status}
 
     # Retry after error: clear completion markers so status reflects current run.
-    if asset.status == "error":
+    if asset.status in {"error", "done"} and force:
         asset.transcription_job_id = None
         asset.transcription_completed_at = None
         asset.transcript_ingested_at = None
 
-    asset.status = "processing"
+    # Stage-based progress: the worker will move extracting_audio -> transcribing -> done/error.
+    asset.status = "extracting_audio"
     asset.transcription_error = None
-    asset.transcription_started_at = (
-        datetime.now(timezone.utc) if asset.transcription_started_at is None else asset.transcription_started_at
-    )
+    # Always reset started_at on force reruns; otherwise set if missing.
+    now = datetime.now(timezone.utc)
+    if force:
+        asset.transcription_started_at = now
+    else:
+        asset.transcription_started_at = now if asset.transcription_started_at is None else asset.transcription_started_at
     await db.commit()
 
-    background_tasks.add_task(transcribe_video_asset, video_asset_id=asset.id, requested_language=None)
+    background_tasks.add_task(
+        transcribe_video_asset,
+        video_asset_id=asset.id,
+        requested_language=requested_language,
+    )
     return {"ok": True, "video_asset_id": str(asset.id), "status": asset.status}
 
 

@@ -243,9 +243,9 @@ async def transcribe_video_asset(*, video_asset_id: UUID, requested_language: st
             await db.commit()
             return
 
-        # Mark processing if not already.
-        if asset.status != "processing":
-            asset.status = "processing"
+        # Stage-based progress.
+        if asset.status not in {"extracting_audio", "transcribing"}:
+            asset.status = "extracting_audio"
         asset.transcription_error = None
         if asset.transcription_started_at is None:
             asset.transcription_started_at = datetime.now(timezone.utc)
@@ -273,6 +273,8 @@ async def transcribe_video_asset(*, video_asset_id: UUID, requested_language: st
                 await asyncio.to_thread(_download)
 
                 # Extract audio.
+                asset.status = "extracting_audio"
+                await db.commit()
                 await asyncio.to_thread(
                     _ffmpeg_extract_audio,
                     ffmpeg_bin=settings.ffmpeg_bin,
@@ -305,6 +307,8 @@ async def transcribe_video_asset(*, video_asset_id: UUID, requested_language: st
                 )
 
                 # Call Runpod.
+                asset.status = "transcribing"
+                await db.commit()
                 result = await runpod.submit_audio_url(
                     audio_url=audio_url,
                     language=requested_language,
@@ -341,6 +345,14 @@ async def transcribe_video_asset(*, video_asset_id: UUID, requested_language: st
                 language_code, segments = _parse_segments_from_runpod_output({"output": output})
                 if requested_language:
                     language_code = requested_language
+
+                # Enforce output contract: we require non-empty timestamped segments.
+                if not segments:
+                    asset.status = "error"
+                    asset.transcription_error = "Runpod returned no transcript segments"
+                    asset.transcription_completed_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    return
 
                 # Replace-all segments for (video_asset_id, language_code).
                 await db.execute(

@@ -148,6 +148,20 @@ async def test_video_assets_auth_and_ownership(monkeypatch) -> None:
         assert got.status_code == 200
         assert got.json()["id"] == asset["id"]
 
+        # Idempotency: registering the same source_file_key again should return the existing asset (not error).
+        dup = await client.post(
+            f"/api/v1/courses/{course_a.id}/video-assets",
+            json={
+                "source_file_key": asset["source_file_key"],
+                "original_filename": "video.mp4",
+                "mime_type": "video/mp4",
+                "size_bytes": 123,
+            },
+            headers={settings.csrf_header_name: token},
+        )
+        assert dup.status_code == 200
+        assert dup.json()["id"] == asset["id"]
+
         # User A must not be able to list B's assets (404 course not found under ownership).
         forbidden_list = await client.get(f"/api/v1/courses/{course_b.id}/video-assets")
         assert forbidden_list.status_code == 404
@@ -164,20 +178,22 @@ async def test_video_assets_auth_and_ownership(monkeypatch) -> None:
 
         start = await client.post(
             f"/api/v1/video-assets/{asset['id']}/transcribe",
+            json={"force": False},
             headers={settings.csrf_header_name: token},
         )
         assert start.status_code == 200
         payload = start.json()
         assert payload["ok"] is True
         assert payload["video_asset_id"] == asset["id"]
-        assert payload["status"] == "processing"
+        assert payload["status"] == "extracting_audio"
 
         # Second call should be idempotent and stay processing.
         start2 = await client.post(
             f"/api/v1/video-assets/{asset['id']}/transcribe",
+            json={"force": False},
             headers={settings.csrf_header_name: token},
         )
         assert start2.status_code == 200
-        assert start2.json()["status"] == "processing"
+        assert start2.json()["status"] == "extracting_audio"
 
 

@@ -1,7 +1,8 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { getCourse } from "@/api/courses";
 import { listCourseContents, createCourseContent, deleteCourseContent, getDownloadUrl } from "@/api/courseContents";
 import { presignUpload } from "@/api/uploads";
+import { createVideoAsset, listVideoAssets, transcribeVideoAsset } from "@/api/videoAssets";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
@@ -44,6 +45,7 @@ export default function CourseContent() {
   const [searchQuery, setSearchQuery] = useState("");
   const [viewMode, setViewMode] = useState("grid");
   const [newContent, setNewContent] = useState({ title: "", description: "", file: null });
+  const [kickoffNotice, setKickoffNotice] = useState(null);
   
   const queryClient = useQueryClient();
 
@@ -57,6 +59,36 @@ export default function CourseContent() {
     queryKey: ['content', courseId, category],
     queryFn: () => listCourseContents(courseId, { category }),
     enabled: !!courseId && !!category
+  });
+
+  // Stage-based processing UI for videos: poll while any are still processing.
+  const { data: videoAssets = [] } = useQuery({
+    queryKey: ['videoAssets', courseId],
+    queryFn: () => listVideoAssets(courseId),
+    enabled: !!courseId && category === "media",
+    refetchInterval: (data) => {
+      const items = data || [];
+      const anyProcessing = Array.isArray(items) && items.some(a => ["processing", "extracting_audio", "transcribing"].includes(a.status));
+      return anyProcessing ? 2000 : false;
+    },
+  });
+
+  const videoAssetByContentId = useMemo(() => {
+    const m = new Map();
+    for (const a of (Array.isArray(videoAssets) ? videoAssets : [])) {
+      if (a?.content_id) m.set(a.content_id, a);
+    }
+    return m;
+  }, [videoAssets]);
+
+  const retryTranscriptionMutation = useMutation({
+    mutationFn: async (videoAssetId) => {
+      if (!videoAssetId) throw new Error("videoAssetId is required");
+      return transcribeVideoAsset(videoAssetId, { force: true });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['videoAssets', courseId] });
+    },
   });
 
   const createContentMutation = useMutation({
@@ -76,7 +108,7 @@ export default function CourseContent() {
           throw new Error(`Upload failed (${putRes.status}): ${text}`);
         }
 
-        await createCourseContent(courseId, {
+        const createdContent = await createCourseContent(courseId, {
           category,
           title: contentData.title,
           description: contentData.description,
@@ -85,6 +117,39 @@ export default function CourseContent() {
           mime_type: contentData.file.type || "application/octet-stream",
           size_bytes: contentData.file.size ?? null,
         });
+
+        // If the uploaded file is a video, register it as a video asset and kick off transcription.
+        const mt = (contentData.file.type || "").toLowerCase();
+        if (mt.startsWith("video/")) {
+          // Best-effort: do not fail the upload if video asset registration/transcription kickoff fails.
+          try {
+            const videoAsset = await createVideoAsset(courseId, {
+              source_file_key: presign.key,
+              original_filename: contentData.file.name,
+              mime_type: contentData.file.type || "application/octet-stream",
+              size_bytes: contentData.file.size ?? null,
+              content_id: createdContent?.id ?? null,
+            });
+            // Fire-and-forget UX: if transcription fails, the asset will be marked "error" and can be retried later.
+            transcribeVideoAsset(videoAsset.id, { force: false }).catch((e) => {
+              console.error("Video transcription kickoff failed:", e);
+              setKickoffNotice({
+                type: "error",
+                message:
+                  "Upload succeeded, but transcription didn’t start. Please check your config, or click Retry on the video card.",
+              });
+              window.setTimeout(() => setKickoffNotice(null), 8000);
+            });
+          } catch (e) {
+            console.error("Video transcription kickoff failed:", e);
+            setKickoffNotice({
+              type: "error",
+              message:
+                "Upload succeeded, but we couldn’t register the video for transcription. Please refresh and try again.",
+            });
+            window.setTimeout(() => setKickoffNotice(null), 8000);
+          }
+        }
         return;
       }
 
@@ -160,6 +225,26 @@ export default function CourseContent() {
       {/* Main Content */}
       <main className="relative z-10 px-6 lg:px-16 py-8">
         <div className="max-w-7xl mx-auto">
+          {category === "media" && kickoffNotice?.message && (
+            <div
+              className={`mb-6 rounded-2xl border px-4 py-3 flex items-start justify-between gap-4 ${
+                kickoffNotice.type === "error"
+                  ? "border-red-500/20 bg-red-500/10 text-red-100"
+                  : "border-white/10 bg-white/5 text-gray-200"
+              }`}
+            >
+              <div className="text-sm leading-relaxed">{kickoffNotice.message}</div>
+              <button
+                type="button"
+                onClick={() => setKickoffNotice(null)}
+                className="shrink-0 p-1 rounded-lg hover:bg-white/10"
+                aria-label="Dismiss"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
           {/* Page Header */}
           <div className="flex items-start justify-between mb-8">
             <div>
@@ -250,6 +335,22 @@ export default function CourseContent() {
               <AnimatePresence>
                 {filteredContent.map((item, index) => {
                   const IconComponent = getFileIcon(item.mime_type);
+                  const mt = (item.mime_type || "").toLowerCase();
+                  const isVideo = mt.startsWith("video/");
+                  const asset = isVideo ? (videoAssetByContentId.get(item.id) || null) : null;
+                  const stage = asset?.status || null;
+                  const isProcessing = stage === "processing" || stage === "extracting_audio" || stage === "transcribing";
+                  const isError = stage === "error";
+                  const stageLabel =
+                    stage === "processing" ? "Starting" :
+                    stage === "extracting_audio" ? "Extracting audio" :
+                    stage === "transcribing" ? "Transcribing" :
+                    null;
+                  const stageProgress =
+                    stage === "processing" ? 15 :
+                    stage === "extracting_audio" ? 45 :
+                    stage === "transcribing" ? 85 :
+                    0;
                   return (
                     <motion.div
                       key={item.id}
@@ -258,7 +359,7 @@ export default function CourseContent() {
                       exit={{ opacity: 0, scale: 0.9 }}
                       transition={{ delay: index * 0.05 }}
                       whileHover={{ y: -3 }}
-                      className="glass-card rounded-2xl p-6 group relative"
+                      className={`glass-card rounded-2xl p-6 group relative ${isProcessing ? "opacity-60" : ""} ${isError ? "opacity-75" : ""}`}
                     >
                       <Button
                         variant="ghost"
@@ -292,6 +393,48 @@ export default function CourseContent() {
                               <File className="w-4 h-4" />
                               View File
                             </button>
+                          )}
+
+                          {isVideo && isProcessing && (
+                            <div className="mt-4">
+                              <div className="flex items-center justify-between text-xs text-gray-300 mb-2">
+                                <span>{stageLabel}</span>
+                                <span>{stageProgress}%</span>
+                              </div>
+                              <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden">
+                                <div
+                                  className="h-full bg-purple-500/70"
+                                  style={{ width: `${stageProgress}%` }}
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {isVideo && isError && (
+                            <div className="mt-4">
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="inline-flex items-center gap-2 text-xs font-semibold text-red-300 bg-red-500/10 border border-red-500/20 rounded-full px-3 py-1">
+                                  Transcription failed
+                                </div>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  onClick={() => retryTranscriptionMutation.mutate(asset.id)}
+                                  disabled={retryTranscriptionMutation.isPending}
+                                  className="h-8 px-3 rounded-full bg-white/5 hover:bg-white/10 text-gray-200"
+                                >
+                                  {retryTranscriptionMutation.isPending ? "Retrying…" : "Retry"}
+                                </Button>
+                              </div>
+                              {asset?.transcription_error && (
+                                <p
+                                  className="mt-2 text-xs text-red-200/80 line-clamp-2"
+                                  title={asset.transcription_error}
+                                >
+                                  {asset.transcription_error}
+                                </p>
+                              )}
+                            </div>
                           )}
                         </div>
                       </div>
