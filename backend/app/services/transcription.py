@@ -115,8 +115,9 @@ class RunpodClient:
         extra_input: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         # Standard Runpod contract: {"input": {...}}.
-        # The standard Runpod faster-whisper worker expects a URL under `audio_url`.
-        input_payload: dict[str, Any] = {"audio_url": audio_url}
+        # The standard runpod-workers/worker-faster_whisper expects the URL under `audio`.
+        # (Some forks use `audio_url`, but we target upstream naming.)
+        input_payload: dict[str, Any] = {"audio": audio_url}
         if language:
             input_payload["language"] = language
         if model:
@@ -165,7 +166,7 @@ def _parse_segments_from_runpod_output(payload: dict[str, Any]) -> tuple[str, li
     # Expect something like: {"output": {"segments": [...], "language": "en"}}.
     output = payload.get("output") or payload.get("result") or {}
     if isinstance(output, dict):
-        language = output.get("language") or "und"
+        language = output.get("language") or output.get("detected_language") or "und"
         segs = output.get("segments") or output.get("transcript") or []
     else:
         language = "und"

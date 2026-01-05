@@ -171,7 +171,7 @@ async def test_transcription_pipeline_persists_segments(monkeypatch) -> None:
                 "id": "job-1",
                 "status": "COMPLETED",
                 "output": {
-                    "language": "en",
+                    "detected_language": "en",
                     "segments": [
                         {"start": 0.0, "end": 1.2, "text": "hello"},
                         {"start": 1.2, "end": 2.0, "text": "world"},
