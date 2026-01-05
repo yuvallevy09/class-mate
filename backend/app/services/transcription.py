@@ -115,7 +115,8 @@ class RunpodClient:
         extra_input: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         # Standard Runpod contract: {"input": {...}}.
-        input_payload: dict[str, Any] = {"audio": audio_url}
+        # The standard Runpod faster-whisper worker expects a URL under `audio_url`.
+        input_payload: dict[str, Any] = {"audio_url": audio_url}
         if language:
             input_payload["language"] = language
         if model:
