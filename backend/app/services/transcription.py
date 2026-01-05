@@ -210,8 +210,15 @@ def _presign_get_object_url(settings: Settings, *, key: str, expires_seconds: in
     )
 
 
-async def transcribe_media_asset(*, media_asset_id: UUID, requested_language: str | None = None) -> None:
+async def transcribe_video_asset(*, video_asset_id: UUID, requested_language: str | None = None) -> None:
     """Background task: download video -> ffmpeg -> Runpod -> persist transcript_segments.
+
+    This is the core PR3.3/PR3.4 pipeline for Video Assets (local uploads):
+    - Download video from S3 using `video_assets.source_file_key`
+    - Extract audio via ffmpeg (mono, 16kHz WAV)
+    - Upload extracted audio back to S3 and store `video_assets.audio_file_key`
+    - Presign the audio URL and call Runpod (faster-whisper worker)
+    - Persist transcript segments into `transcript_segments`
 
     Updates `video_assets.status` and transcription_* fields as it progresses.
     """
@@ -225,7 +232,7 @@ async def transcribe_media_asset(*, media_asset_id: UUID, requested_language: st
     SessionLocal = get_session_maker()
 
     async with SessionLocal() as db:
-        res = await db.execute(select(VideoAsset).where(VideoAsset.id == media_asset_id))
+        res = await db.execute(select(VideoAsset).where(VideoAsset.id == video_asset_id))
         asset = res.scalar_one_or_none()
         if asset is None:
             return
@@ -236,10 +243,12 @@ async def transcribe_media_asset(*, media_asset_id: UUID, requested_language: st
             await db.commit()
             return
 
-        # Mark processing.
-        asset.status = "processing"
+        # Mark processing if not already.
+        if asset.status != "processing":
+            asset.status = "processing"
         asset.transcription_error = None
-        asset.transcription_started_at = datetime.now(timezone.utc)
+        if asset.transcription_started_at is None:
+            asset.transcription_started_at = datetime.now(timezone.utc)
         await db.commit()
 
         s3 = _s3_client(settings)
@@ -254,47 +263,14 @@ async def transcribe_media_asset(*, media_asset_id: UUID, requested_language: st
                 td_path = Path(td)
                 video_path = td_path / "input.video"
                 wav_path = td_path / "audio.wav"
-                thumb_path = td_path / "thumbnail.jpg"
 
                 # Download video from S3.
                 def _download():
-                    obj = s3.get_object(Bucket=settings.s3_bucket, Key=asset.source_file_key)
-                    body = obj["Body"].read()
-                    video_path.write_bytes(body)
+                    # Stream to disk to avoid loading large videos into memory.
+                    with video_path.open("wb") as f:
+                        s3.download_fileobj(settings.s3_bucket, asset.source_file_key, f)
 
                 await asyncio.to_thread(_download)
-
-                # Best-effort thumbnail generation (do not fail the whole job).
-                try:
-                    await asyncio.to_thread(
-                        _ffmpeg_extract_thumbnail,
-                        ffmpeg_bin=settings.ffmpeg_bin,
-                        video_path=video_path,
-                        thumbnail_path=thumb_path,
-                        seek_seconds=float(settings.thumbnail_seek_seconds),
-                    )
-                    if thumb_path.exists() and thumb_path.stat().st_size > 0:
-                        thumb_key = (
-                            asset.thumbnail_file_key
-                            or f"courses/{asset.course_id}/video-assets/{asset.id}/thumbnail.jpg"
-                        )
-
-                        def _upload_thumb():
-                            s3.put_object(
-                                Bucket=settings.s3_bucket,
-                                Key=thumb_key,
-                                Body=thumb_path.read_bytes(),
-                                ContentType="image/jpeg",
-                            )
-
-                        await asyncio.to_thread(_upload_thumb)
-                        asset.thumbnail_file_key = thumb_key
-                        asset.thumbnail_mime_type = "image/jpeg"
-                        asset.thumbnail_generated_at = datetime.now(timezone.utc)
-                        await db.commit()
-                except Exception:
-                    # Ignore thumbnail failures; transcription can still succeed.
-                    pass
 
                 # Extract audio.
                 await asyncio.to_thread(
@@ -308,12 +284,14 @@ async def transcribe_media_asset(*, media_asset_id: UUID, requested_language: st
                 audio_key = asset.audio_file_key or f"courses/{asset.course_id}/video-assets/{asset.id}/audio.wav"
 
                 def _upload_audio():
-                    s3.put_object(
-                        Bucket=settings.s3_bucket,
-                        Key=audio_key,
-                        Body=wav_path.read_bytes(),
-                        ContentType="audio/wav",
-                    )
+                    # Stream from disk to avoid loading audio into memory.
+                    with wav_path.open("rb") as f:
+                        s3.upload_fileobj(
+                            f,
+                            settings.s3_bucket,
+                            audio_key,
+                            ExtraArgs={"ContentType": "audio/wav"},
+                        )
 
                 await asyncio.to_thread(_upload_audio)
                 asset.audio_file_key = audio_key

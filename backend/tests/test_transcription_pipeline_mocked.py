@@ -66,7 +66,7 @@ async def _create_course(database_url: str, *, user_id: int, name: str) -> Cours
         await engine.dispose()
 
 
-async def _create_media_asset(database_url: str, *, course_id, source_key: str) -> VideoAsset:
+async def _create_video_asset(database_url: str, *, course_id, source_key: str) -> VideoAsset:
     engine = create_async_engine(database_url, pool_pre_ping=True)
     SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
     try:
@@ -74,12 +74,11 @@ async def _create_media_asset(database_url: str, *, course_id, source_key: str) 
             asset = VideoAsset(
                 course_id=course_id,
                 provider="local",
-                status="queued",
+                status="uploaded",
                 source_file_key=source_key,
                 mime_type="video/mp4",
                 original_filename="video.mp4",
                 size_bytes=10,
-                video_guid=None,
             )
             session.add(asset)
             await session.commit()
@@ -105,7 +104,7 @@ async def test_transcription_pipeline_persists_segments(monkeypatch) -> None:
 
     user = await _create_user(settings.database_url, email=f"u-{uuid4()}@e.com", password="pw")
     course = await _create_course(settings.database_url, user_id=user.id, name="Course")
-    asset = await _create_media_asset(
+    asset = await _create_video_asset(
         settings.database_url, course_id=course.id, source_key=f"users/{user.id}/courses/{course.id}/x.mp4"
     )
 
@@ -113,25 +112,23 @@ async def test_transcription_pipeline_persists_segments(monkeypatch) -> None:
     # - download video: return some bytes (content doesn't matter because ffmpeg is stubbed)
     # - upload extracted audio: capture the key
     # - generate presigned URL for audio: return a stable HTTPS URL
-    class _Body:
-        def read(self):
-            return b"fake-video"
-
     class _StubS3:
         def __init__(self):
-            self.put_calls = []
+            self.upload_calls = []
 
-        def get_object(self, *, Bucket, Key):
+        def download_fileobj(self, Bucket, Key, Fileobj):
             assert Bucket == settings.s3_bucket
             assert Key == asset.source_file_key
-            return {"Body": _Body()}
+            Fileobj.write(b"fake-video")
 
-        def put_object(self, *, Bucket, Key, Body, ContentType):
+        def upload_fileobj(self, Fileobj, Bucket, Key, ExtraArgs=None):
             assert Bucket == settings.s3_bucket
             assert Key
-            assert Body  # bytes
-            assert ContentType in {"audio/wav", "image/jpeg"}
-            self.put_calls.append({"Bucket": Bucket, "Key": Key})
+            body = Fileobj.read()
+            assert body  # bytes
+            ct = (ExtraArgs or {}).get("ContentType")
+            assert ct in {"audio/wav"}
+            self.upload_calls.append({"Bucket": Bucket, "Key": Key})
 
         def generate_presigned_url(self, *, ClientMethod, Params, ExpiresIn):
             assert ClientMethod == "get_object"
@@ -154,6 +151,10 @@ async def test_transcription_pipeline_persists_segments(monkeypatch) -> None:
     class _StubRunpod:
         def __init__(self, *args, **kwargs):
             pass
+ 
+        @staticmethod
+        def extract_job_id(payload: dict) -> str:
+            return str(payload.get("id") or "job-unknown")
 
         async def submit_audio_url(
             self,
@@ -181,7 +182,7 @@ async def test_transcription_pipeline_persists_segments(monkeypatch) -> None:
     monkeypatch.setattr(svc, "RunpodClient", _StubRunpod)
 
     # Run the background task function directly.
-    await svc.transcribe_media_asset(media_asset_id=asset.id, requested_language=None)
+    await svc.transcribe_video_asset(video_asset_id=asset.id, requested_language=None)
 
     # Verify DB state.
     engine = create_async_engine(settings.database_url, pool_pre_ping=True)

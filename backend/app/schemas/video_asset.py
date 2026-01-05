@@ -33,6 +33,7 @@ class VideoAssetPublic(BaseModel):
     original_filename: str | None
     mime_type: str | None
     size_bytes: int | None
+    audio_file_key: str | None
 
     transcription_job_id: str | None
     transcription_error: str | None

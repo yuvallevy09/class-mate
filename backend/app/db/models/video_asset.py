@@ -39,6 +39,8 @@ class VideoAsset(Base):
 
     # Transcription state (PR3 will populate these).
     status: Mapped[str] = mapped_column(String(64), nullable=False, default="uploaded", index=True)
+    # Extracted audio is uploaded back to S3 so Runpod can fetch it via a presigned URL.
+    audio_file_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     transcription_job_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     transcription_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     transcription_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

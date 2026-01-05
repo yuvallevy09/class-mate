@@ -16,6 +16,7 @@ from app.core.settings import get_settings
 from app.db.models.course import Course
 from app.db.models.user import User
 from app.main import app
+import app.api.v1.video_assets as video_assets_api
 
 
 async def _can_connect(database_url: str) -> bool:
@@ -69,6 +70,9 @@ async def _create_course(database_url: str, *, user_id: int, name: str) -> Cours
 async def test_video_assets_auth_and_ownership(monkeypatch) -> None:
     # Ensure settings pick up S3_BUCKET for this test.
     monkeypatch.setenv("S3_BUCKET", "classmate")
+    # Dummy Runpod config so /transcribe can proceed past config validation.
+    monkeypatch.setenv("RUNPOD_API_KEY", "test-key")
+    monkeypatch.setenv("RUNPOD_ENDPOINT_ID", "test-endpoint")
     get_settings.cache_clear()
     settings = get_settings()
 
@@ -151,5 +155,29 @@ async def test_video_assets_auth_and_ownership(monkeypatch) -> None:
         # User A must not be able to fetch a random UUID.
         missing = await client.get(f"/api/v1/video-assets/{uuid4()}")
         assert missing.status_code == 404
+
+        # Start transcription should flip status to processing (PR3.2 behavior).
+        async def _noop_transcribe_video_asset(*, video_asset_id, requested_language=None):
+            return None
+
+        monkeypatch.setattr(video_assets_api, "transcribe_video_asset", _noop_transcribe_video_asset)
+
+        start = await client.post(
+            f"/api/v1/video-assets/{asset['id']}/transcribe",
+            headers={settings.csrf_header_name: token},
+        )
+        assert start.status_code == 200
+        payload = start.json()
+        assert payload["ok"] is True
+        assert payload["video_asset_id"] == asset["id"]
+        assert payload["status"] == "processing"
+
+        # Second call should be idempotent and stay processing.
+        start2 = await client.post(
+            f"/api/v1/video-assets/{asset['id']}/transcribe",
+            headers={settings.csrf_header_name: token},
+        )
+        assert start2.status_code == 200
+        assert start2.json()["status"] == "processing"
 
 

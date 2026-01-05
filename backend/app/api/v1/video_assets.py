@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +17,7 @@ from app.db.models.video_asset import VideoAsset
 from app.db.session import get_db
 from app.schemas.transcript_segment import TranscriptSegmentPublic
 from app.schemas.video_asset import VideoAssetCreate, VideoAssetPublic
+from app.services.transcription import transcribe_video_asset
 
 router = APIRouter(tags=["video-assets"])
 
@@ -156,6 +158,7 @@ async def list_video_asset_segments(
 @router.post("/video-assets/{video_asset_id}/transcribe")
 async def start_transcription_stub(
     video_asset_id: UUID,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
@@ -170,6 +173,8 @@ async def start_transcription_stub(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video asset not found")
 
+    asset: VideoAsset = row[0]
+
     # PR3.1: wire config validation now, implement the pipeline in PR3.2+.
     if not settings.s3_bucket:
         raise HTTPException(
@@ -182,9 +187,24 @@ async def start_transcription_stub(
             detail="Runpod is not configured (missing RUNPOD_API_KEY / RUNPOD_ENDPOINT_ID)",
         )
 
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Transcription is not implemented yet (PR3 will add ffmpeg + Runpod + whisper-timestamped).",
+    # PR3.2: update DB state and enqueue background work (actual pipeline comes in PR3.3+).
+    if asset.status in {"processing", "done"}:
+        return {"ok": True, "video_asset_id": str(asset.id), "status": asset.status}
+
+    # Retry after error: clear completion markers so status reflects current run.
+    if asset.status == "error":
+        asset.transcription_job_id = None
+        asset.transcription_completed_at = None
+        asset.transcript_ingested_at = None
+
+    asset.status = "processing"
+    asset.transcription_error = None
+    asset.transcription_started_at = (
+        datetime.now(timezone.utc) if asset.transcription_started_at is None else asset.transcription_started_at
     )
+    await db.commit()
+
+    background_tasks.add_task(transcribe_video_asset, video_asset_id=asset.id, requested_language=None)
+    return {"ok": True, "video_asset_id": str(asset.id), "status": asset.status}
 
 
