@@ -28,7 +28,8 @@ class VideoAsset(Base):
         index=True,
     )
 
-    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="bunny", index=True)
+    # Provider is intentionally generic; Bunny ingestion has been removed.
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="local", index=True)
 
     # Bunny-specific identifiers.
     video_library_id: Mapped[int | None] = mapped_column(Integer, nullable=True)

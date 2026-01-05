@@ -19,12 +19,11 @@ import CourseSidebar from "@/components/CourseSidebar";
 
 const CATEGORY_LABELS = {
   overview: "Overview",
-  media: "Course Media",
+  media: "Videos",
   notes: "Notes",
   past_exams: "Past Exams",
   past_assignments: "Past Assignments",
   additional_resources: "Additional Resources",
-  general: "General"
 };
 
 const FILE_ICONS = {
