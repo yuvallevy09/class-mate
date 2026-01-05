@@ -158,6 +158,7 @@ async def start_transcription_stub(
     video_asset_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
 ) -> dict:
     # Ownership check via join.
     res = await db.execute(
@@ -168,6 +169,18 @@ async def start_transcription_stub(
     row = res.first()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video asset not found")
+
+    # PR3.1: wire config validation now, implement the pipeline in PR3.2+.
+    if not settings.s3_bucket:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="S3 is not configured (missing S3_BUCKET)",
+        )
+    if not (settings.runpod_api_key and settings.runpod_endpoint_id):
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Runpod is not configured (missing RUNPOD_API_KEY / RUNPOD_ENDPOINT_ID)",
+        )
 
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,

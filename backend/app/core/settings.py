@@ -10,6 +10,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_ignore_empty=True, extra="ignore")
 
+    # Environment
+    environment: Literal["development", "test", "production"] = Field(
+        default="development", validation_alias="ENVIRONMENT"
+    )
+
     # Server
     port: int = Field(default=3001, validation_alias="PORT")
 
@@ -30,7 +35,22 @@ class Settings(BaseSettings):
     s3_secret_access_key: str | None = Field(default=None, validation_alias="S3_SECRET_ACCESS_KEY")
     s3_presign_expires_seconds: int = Field(default=900, validation_alias="S3_PRESIGN_EXPIRES_SECONDS")
     s3_download_expires_seconds: int = Field(default=300, validation_alias="S3_DOWNLOAD_EXPIRES_SECONDS")
+    s3_audio_presign_expires_seconds: int = Field(
+        default=3600, validation_alias="S3_AUDIO_PRESIGN_EXPIRES_SECONDS"
+    )
     upload_max_size_bytes: int = Field(default=26214400, validation_alias="UPLOAD_MAX_SIZE_BYTES")
+
+    # ffmpeg (video -> audio/thumbnail)
+    ffmpeg_bin: str = Field(default="ffmpeg", validation_alias="FFMPEG_BIN")
+    thumbnail_seek_seconds: float = Field(default=1.0, validation_alias="THUMBNAIL_SEEK_SECONDS")
+
+    # Runpod serverless (faster-whisper)
+    runpod_api_key: str | None = Field(default=None, validation_alias="RUNPOD_API_KEY")
+    runpod_endpoint_id: str | None = Field(default=None, validation_alias="RUNPOD_ENDPOINT_ID")
+    runpod_poll_interval_seconds: float = Field(default=2.0, validation_alias="RUNPOD_POLL_INTERVAL_SECONDS")
+    runpod_timeout_seconds: float = Field(default=600.0, validation_alias="RUNPOD_TIMEOUT_SECONDS")
+    runpod_use_runsync: bool = Field(default=True, validation_alias="RUNPOD_USE_RUNSYNC")
+    runpod_whisper_model: str = Field(default="base", validation_alias="RUNPOD_WHISPER_MODEL")
 
     # LLM (Gemini)
     # We read both, but the caller should choose deterministically and pass api_key explicitly.
@@ -105,6 +125,8 @@ class Settings(BaseSettings):
             raise ValueError("S3_PRESIGN_EXPIRES_SECONDS must be > 0")
         if self.s3_download_expires_seconds <= 0:
             raise ValueError("S3_DOWNLOAD_EXPIRES_SECONDS must be > 0")
+        if self.s3_audio_presign_expires_seconds <= 0:
+            raise ValueError("S3_AUDIO_PRESIGN_EXPIRES_SECONDS must be > 0")
         if self.upload_max_size_bytes <= 0:
             raise ValueError("UPLOAD_MAX_SIZE_BYTES must be > 0")
         if self.chat_history_max_messages <= 0:
@@ -119,6 +141,12 @@ class Settings(BaseSettings):
             raise ValueError("RAG_CHUNK_OVERLAP must be >= 0")
         if self.rag_chunk_overlap >= self.rag_chunk_size:
             raise ValueError("RAG_CHUNK_OVERLAP must be < RAG_CHUNK_SIZE")
+        if float(self.thumbnail_seek_seconds) < 0.0:
+            raise ValueError("THUMBNAIL_SEEK_SECONDS must be >= 0")
+        if float(self.runpod_poll_interval_seconds) <= 0:
+            raise ValueError("RUNPOD_POLL_INTERVAL_SECONDS must be > 0")
+        if float(self.runpod_timeout_seconds) <= 0:
+            raise ValueError("RUNPOD_TIMEOUT_SECONDS must be > 0")
         return self
 
 
