@@ -142,6 +142,13 @@ async def test_course_content_title_and_category_required_and_s3_guard(monkeypat
             )
             assert missing_category.status_code == 422
 
+            invalid_category = await client.post(
+                f"/api/v1/courses/{course_id}/contents",
+                json={"category": "past_exams", "title": "Old label"},
+                headers={settings.csrf_header_name: token},
+            )
+            assert invalid_category.status_code == 422
+
             # Without S3 configured, attaching a file should be rejected.
             with_file = await client.post(
                 f"/api/v1/courses/{course_id}/contents",

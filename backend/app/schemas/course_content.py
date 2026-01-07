@@ -6,6 +6,16 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+ALLOWED_COURSE_CONTENT_CATEGORIES: set[str] = {
+    "overview",
+    "media",
+    "notes",
+    "assignments",
+    "exams",
+    "additional_resources",
+}
+
+
 class CourseContentCreate(BaseModel):
     # Reject unknown fields so clients fail fast if they send legacy/typo keys.
     model_config = ConfigDict(extra="forbid")
@@ -25,6 +35,14 @@ class CourseContentCreate(BaseModel):
         v = (v or "").strip()
         if not v:
             raise ValueError("Value is required")
+        return v
+
+    @field_validator("category")
+    @classmethod
+    def _validate_category(cls, v: str) -> str:
+        v = (v or "").strip()
+        if v not in ALLOWED_COURSE_CONTENT_CATEGORIES:
+            raise ValueError(f"Invalid category: {v}")
         return v
 
 

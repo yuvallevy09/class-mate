@@ -56,17 +56,7 @@ async def list_course_contents(
 
     stmt = select(CourseContent).where(CourseContent.course_id == course_id)
     if category:
-        # Backwards-compat for older frontend links.
-        # New canonical categories:
-        # - assignments (was past_assignments)
-        # - exams (was past_exams)
-        cat = (category or "").strip()
-        if cat == "assignments":
-            stmt = stmt.where(CourseContent.category.in_(["assignments", "past_assignments"]))
-        elif cat == "exams":
-            stmt = stmt.where(CourseContent.category.in_(["exams", "past_exams"]))
-        else:
-            stmt = stmt.where(CourseContent.category == cat)
+        stmt = stmt.where(CourseContent.category == (category or "").strip())
     stmt = stmt.order_by(CourseContent.created_at.desc())
 
     res = await db.execute(stmt)

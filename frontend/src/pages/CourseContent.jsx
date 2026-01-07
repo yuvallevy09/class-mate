@@ -37,7 +37,20 @@ const FILE_ICONS = {
 export default function CourseContent() {
   const urlParams = new URLSearchParams(window.location.search);
   const courseId = urlParams.get("courseId");
-  const category = urlParams.get("category");
+  const rawCategory = urlParams.get("category");
+  // Clean canonical categories: rewrite legacy bookmark values in the URL (client-side only).
+  const category = useMemo(() => {
+    const c = String(rawCategory || "");
+    if (c === "past_exams") return "exams";
+    if (c === "past_assignments") return "assignments";
+    return c;
+  }, [rawCategory]);
+  if (rawCategory && category && rawCategory !== category) {
+    const next = new URLSearchParams(window.location.search);
+    next.set("category", category);
+    const nextUrl = `${window.location.pathname}?${next.toString()}`;
+    window.history.replaceState({}, "", nextUrl);
+  }
   const isVideosPage = category === "media";
   const videoUploadMaxSizeMb = Number(import.meta?.env?.VITE_UPLOAD_MAX_SIZE_MB) || 100;
   
