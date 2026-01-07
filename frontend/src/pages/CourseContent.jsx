@@ -2,7 +2,7 @@ import React, { useMemo, useState } from "react";
 import { getCourse } from "@/api/courses";
 import { listCourseContents, createCourseContent, deleteCourseContent, getDownloadUrl } from "@/api/courseContents";
 import { presignUpload } from "@/api/uploads";
-import { createVideoAsset, listVideoAssets, transcribeVideoAsset } from "@/api/videoAssets";
+import { finalizeVideoUpload, listVideoAssets, transcribeVideoAsset } from "@/api/videoAssets";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
@@ -22,8 +22,8 @@ const CATEGORY_LABELS = {
   overview: "Overview",
   media: "Videos",
   notes: "Slides & Notes",
-  past_exams: "Exams",
-  past_assignments: "Assignments",
+  exams: "Exams",
+  assignments: "Assignments",
   additional_resources: "Additional Resources",
 };
 
@@ -110,38 +110,31 @@ export default function CourseContent() {
           throw new Error(`Upload failed (${putRes.status}): ${text}`);
         }
 
-        const createdContent = await createCourseContent(courseId, {
-          category,
-          title: contentData.title,
-          description: contentData.description,
-          file_key: presign.key,
-          original_filename: contentData.file.name,
-          mime_type: contentData.file.type || "application/octet-stream",
-          size_bytes: contentData.file.size ?? null,
-        });
-
-        // If the uploaded file is a video, register it as a video asset and kick off transcription.
         const mt = (contentData.file.type || "").toLowerCase();
         if (mt.startsWith("video/")) {
-          // Best-effort: do not fail the upload if video asset registration/transcription kickoff fails.
           try {
-            const videoAsset = await createVideoAsset(courseId, {
+            const res = await finalizeVideoUpload(courseId, {
+              title: contentData.title,
+              description: contentData.description,
               source_file_key: presign.key,
               original_filename: contentData.file.name,
               mime_type: contentData.file.type || "application/octet-stream",
               size_bytes: contentData.file.size ?? null,
-              content_id: createdContent?.id ?? null,
+              kickoffTranscription: false,
             });
+            const videoAsset = res?.videoAsset;
             // Fire-and-forget UX: if transcription fails, the asset will be marked "error" and can be retried later.
-            transcribeVideoAsset(videoAsset.id, { force: false }).catch((e) => {
-              console.error("Video transcription kickoff failed:", e);
-              setKickoffNotice({
-                type: "error",
-                message:
-                  "Upload succeeded, but transcription didn’t start. Please check your config, or click Retry on the video card.",
+            if (videoAsset?.id) {
+              transcribeVideoAsset(videoAsset.id, { force: false }).catch((e) => {
+                console.error("Video transcription kickoff failed:", e);
+                setKickoffNotice({
+                  type: "error",
+                  message:
+                    "Upload succeeded, but transcription didn’t start. Please check your config, or click Retry on the video card.",
+                });
+                window.setTimeout(() => setKickoffNotice(null), 8000);
               });
-              window.setTimeout(() => setKickoffNotice(null), 8000);
-            });
+            }
           } catch (e) {
             console.error("Video transcription kickoff failed:", e);
             setKickoffNotice({
@@ -151,7 +144,18 @@ export default function CourseContent() {
             });
             window.setTimeout(() => setKickoffNotice(null), 8000);
           }
+          return;
         }
+
+        await createCourseContent(courseId, {
+          category,
+          title: contentData.title,
+          description: contentData.description,
+          file_key: presign.key,
+          original_filename: contentData.file.name,
+          mime_type: contentData.file.type || "application/octet-stream",
+          size_bytes: contentData.file.size ?? null,
+        });
         return;
       }
 

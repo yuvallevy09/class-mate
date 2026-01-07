@@ -22,9 +22,9 @@ class VideoAsset(Base):
     )
 
     # Optional link back to a course_contents row (e.g. a "video" content item in the library UI).
-    content_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("course_contents.id", ondelete="SET NULL"),
-        nullable=True,
+    content_id: Mapped[UUID] = mapped_column(
+        ForeignKey("course_contents.id", ondelete="CASCADE"),
+        nullable=False,
         index=True,
     )
 

@@ -15,8 +15,8 @@ class VideoAssetCreate(BaseModel):
     mime_type: str | None = Field(default=None, max_length=255)
     size_bytes: int | None = None
 
-    # Optional link to a course_contents row (e.g. a "video" content item in the content library UI).
-    content_id: UUID | None = None
+    # Required link to a course_contents row (canonical content item for this video).
+    content_id: UUID
 
 
 class VideoAssetPublic(BaseModel):

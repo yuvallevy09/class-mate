@@ -24,8 +24,8 @@ export const COURSE_SIDEBAR_ITEMS = [
   { id: "overview", label: "Overview", icon: BookOpen },
   { id: "media", label: "Videos", icon: Video },
   { id: "notes", label: "Slides & Notes", icon: FileText },
-  { id: "past_assignments", label: "Assignments", icon: ClipboardList },
-  { id: "past_exams", label: "Exams", icon: FileQuestion },
+  { id: "assignments", label: "Assignments", icon: ClipboardList },
+  { id: "exams", label: "Exams", icon: FileQuestion },
   { id: "additional_resources", label: "Additional Resources", icon: FolderOpen },
 ];
 

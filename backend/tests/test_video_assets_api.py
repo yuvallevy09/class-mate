@@ -17,6 +17,7 @@ from app.db.models.course import Course
 from app.db.models.user import User
 from app.main import app
 import app.api.v1.video_assets as video_assets_api
+import app.api.v1.course_contents as course_contents_api
 
 
 async def _can_connect(database_url: str) -> bool:
@@ -110,34 +111,44 @@ async def test_video_assets_auth_and_ownership(monkeypatch) -> None:
         )
         assert login.status_code == 200
 
-        # CSRF required for create.
-        missing_csrf_create = await client.post(
-            f"/api/v1/courses/{course_a.id}/video-assets",
+        # CSRF required for finalize.
+        missing_csrf_finalize = await client.post(
+            f"/api/v1/courses/{course_a.id}/videos",
             json={
+                "title": "Lecture 1",
+                "description": "Intro",
                 "source_file_key": f"users/{user_a.id}/courses/{course_a.id}/{uuid4()}_video.mp4",
                 "original_filename": "video.mp4",
                 "mime_type": "video/mp4",
                 "size_bytes": 123,
+                "kickoffTranscription": False,
             },
         )
-        assert missing_csrf_create.status_code == 403
+        assert missing_csrf_finalize.status_code == 403
 
         created = await client.post(
-            f"/api/v1/courses/{course_a.id}/video-assets",
+            f"/api/v1/courses/{course_a.id}/videos",
             json={
+                "title": "Lecture 1",
+                "description": "Intro",
                 "source_file_key": f"users/{user_a.id}/courses/{course_a.id}/{uuid4()}_video.mp4",
                 "original_filename": "video.mp4",
                 "mime_type": "video/mp4",
                 "size_bytes": 123,
+                "kickoffTranscription": False,
             },
             headers={settings.csrf_header_name: token},
         )
         assert created.status_code == 200
-        asset = created.json()
+        created_payload = created.json()
+        assert created_payload["content"]["course_id"] == str(course_a.id)
+        assert created_payload["content"]["category"] == "media"
+        asset = created_payload["videoAsset"]
         assert asset["course_id"] == str(course_a.id)
         assert asset["provider"] == "local"
         assert asset["status"] == "uploaded"
         assert asset["source_file_key"].startswith(f"users/{user_a.id}/")
+        assert asset["content_id"] == created_payload["content"]["id"]
 
         listed = await client.get(f"/api/v1/courses/{course_a.id}/video-assets")
         assert listed.status_code == 200
@@ -148,19 +159,22 @@ async def test_video_assets_auth_and_ownership(monkeypatch) -> None:
         assert got.status_code == 200
         assert got.json()["id"] == asset["id"]
 
-        # Idempotency: registering the same source_file_key again should return the existing asset (not error).
+        # Idempotency: finalizing the same source_file_key again should return the existing asset (not error).
         dup = await client.post(
-            f"/api/v1/courses/{course_a.id}/video-assets",
+            f"/api/v1/courses/{course_a.id}/videos",
             json={
+                "title": "Lecture 1 (dup)",
+                "description": "Intro (dup)",
                 "source_file_key": asset["source_file_key"],
                 "original_filename": "video.mp4",
                 "mime_type": "video/mp4",
                 "size_bytes": 123,
+                "kickoffTranscription": False,
             },
             headers={settings.csrf_header_name: token},
         )
         assert dup.status_code == 200
-        assert dup.json()["id"] == asset["id"]
+        assert dup.json()["videoAsset"]["id"] == asset["id"]
 
         # User A must not be able to list B's assets (404 course not found under ownership).
         forbidden_list = await client.get(f"/api/v1/courses/{course_b.id}/video-assets")
@@ -182,10 +196,10 @@ async def test_video_assets_auth_and_ownership(monkeypatch) -> None:
             headers={settings.csrf_header_name: token},
         )
         assert start.status_code == 200
-        payload = start.json()
-        assert payload["ok"] is True
-        assert payload["video_asset_id"] == asset["id"]
-        assert payload["status"] == "extracting_audio"
+        start_payload = start.json()
+        assert start_payload["ok"] is True
+        assert start_payload["video_asset_id"] == asset["id"]
+        assert start_payload["status"] == "extracting_audio"
 
         # Second call should be idempotent and stay processing.
         start2 = await client.post(
@@ -195,5 +209,21 @@ async def test_video_assets_auth_and_ownership(monkeypatch) -> None:
         )
         assert start2.status_code == 200
         assert start2.json()["status"] == "extracting_audio"
+
+        # Deleting the content item should cascade-delete the video asset (FK ON DELETE CASCADE).
+        class _StubS3:
+            def delete_object(self, *, Bucket, Key):
+                return {}
+
+        monkeypatch.setattr(course_contents_api, "_s3_client", lambda _settings: _StubS3())
+
+        deleted = await client.delete(
+            f"/api/v1/contents/{created_payload['content']['id']}",
+            headers={settings.csrf_header_name: token},
+        )
+        assert deleted.status_code == 204
+
+        gone = await client.get(f"/api/v1/video-assets/{asset['id']}")
+        assert gone.status_code == 404
 
 

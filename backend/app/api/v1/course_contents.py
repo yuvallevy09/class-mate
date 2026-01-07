@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 import boto3
@@ -13,12 +14,14 @@ from app.api.deps import get_current_user
 from app.core.settings import Settings, get_settings
 from app.db.models.course import Course
 from app.db.models.course_content import CourseContent
+from app.db.models.video_asset import VideoAsset
 from app.db.models.user import User
 from app.db.session import get_db
 from app.rag.ingest import index_course_for_user
 from app.schemas.course_content import CourseContentCreate, CourseContentPublic
 
 router = APIRouter(tags=["course-contents"])
+logger = logging.getLogger(__name__)
 
 class DownloadUrlResponse(BaseModel):
     url: str
@@ -53,7 +56,17 @@ async def list_course_contents(
 
     stmt = select(CourseContent).where(CourseContent.course_id == course_id)
     if category:
-        stmt = stmt.where(CourseContent.category == category)
+        # Backwards-compat for older frontend links.
+        # New canonical categories:
+        # - assignments (was past_assignments)
+        # - exams (was past_exams)
+        cat = (category or "").strip()
+        if cat == "assignments":
+            stmt = stmt.where(CourseContent.category.in_(["assignments", "past_assignments"]))
+        elif cat == "exams":
+            stmt = stmt.where(CourseContent.category.in_(["exams", "past_exams"]))
+        else:
+            stmt = stmt.where(CourseContent.category == cat)
     stmt = stmt.order_by(CourseContent.created_at.desc())
 
     res = await db.execute(stmt)
@@ -117,27 +130,37 @@ async def delete_course_content(
 
     content: CourseContent = row[0]
 
-    # Best-effort storage cleanup: if there's an S3 object, delete it before deleting the DB row.
-    # If the object is already missing, treat as success. For other S3 errors, fail fast so
-    # callers can retry and we don't orphan storage.
+    # Storage cleanup policy (best-effort):
+    # - DB is the source of truth; always delete DB rows.
+    # - Attempt to delete S3 objects (ignore failures to avoid blocking deletes).
+    keys_to_delete: list[str] = []
     if content.file_key:
-        if not settings.s3_bucket:
-            raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="S3 is not configured (missing S3_BUCKET); cannot delete stored file",
-            )
+        keys_to_delete.append(content.file_key)
+
+    # If this is a video content item, also attempt cleanup of derived artifacts (audio_file_key)
+    # and any source_file_key if it differs from the content file key.
+    mt = (content.mime_type or "").strip().lower()
+    if content.category == "media" and mt.startswith("video/"):
+        vres = await db.execute(select(VideoAsset).where(VideoAsset.content_id == content.id))
+        asset = vres.scalar_one_or_none()
+        if asset is not None:
+            if asset.source_file_key and asset.source_file_key not in keys_to_delete:
+                keys_to_delete.append(asset.source_file_key)
+            if asset.audio_file_key and asset.audio_file_key not in keys_to_delete:
+                keys_to_delete.append(asset.audio_file_key)
+
+    if keys_to_delete and settings.s3_bucket:
         s3 = _s3_client(settings)
-        try:
-            s3.delete_object(Bucket=settings.s3_bucket, Key=content.file_key)
-        except ClientError as e:
-            code = (e.response or {}).get("Error", {}).get("Code")
-            if code in {"NoSuchKey", "404", "NotFound"}:
-                pass
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail="Failed to delete file from S3",
-                ) from e
+        for key in keys_to_delete:
+            try:
+                s3.delete_object(Bucket=settings.s3_bucket, Key=key)
+            except ClientError as e:
+                code = (e.response or {}).get("Error", {}).get("Code")
+                # Ignore missing objects and transient failures; log for observability.
+                if code not in {"NoSuchKey", "404", "NotFound"}:
+                    logger.warning("S3 delete failed (best-effort): %s", str(e))
+            except Exception as e:
+                logger.warning("S3 delete failed (best-effort): %s", str(e))
 
     await db.delete(content)
     await db.commit()

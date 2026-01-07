@@ -16,6 +16,7 @@ from app.db.models.course import Course
 from app.db.models.transcript_segment import TranscriptSegment
 from app.db.models.user import User
 from app.db.models.video_asset import VideoAsset
+from app.db.models.course_content import CourseContent
 from app.services import transcription as svc
 
 
@@ -71,8 +72,22 @@ async def _create_video_asset(database_url: str, *, course_id, source_key: str) 
     SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with SessionLocal() as session:
+            # Video assets now require a canonical course_contents row (content_id NOT NULL).
+            content = CourseContent(
+                course_id=course_id,
+                category="media",
+                title="Video",
+                description=None,
+                file_key=source_key,
+                original_filename="video.mp4",
+                mime_type="video/mp4",
+                size_bytes=10,
+            )
+            session.add(content)
+            await session.flush()
             asset = VideoAsset(
                 course_id=course_id,
+                content_id=content.id,
                 provider="local",
                 status="uploaded",
                 source_file_key=source_key,
