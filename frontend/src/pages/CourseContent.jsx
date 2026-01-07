@@ -21,9 +21,9 @@ import CourseSidebar from "@/components/CourseSidebar";
 const CATEGORY_LABELS = {
   overview: "Overview",
   media: "Videos",
-  notes: "Notes",
-  past_exams: "Past Exams",
-  past_assignments: "Past Assignments",
+  notes: "Slides & Notes",
+  past_exams: "Exams",
+  past_assignments: "Assignments",
   additional_resources: "Additional Resources",
 };
 
@@ -38,6 +38,8 @@ export default function CourseContent() {
   const urlParams = new URLSearchParams(window.location.search);
   const courseId = urlParams.get("courseId");
   const category = urlParams.get("category");
+  const isVideosPage = category === "media";
+  const videoUploadMaxSizeMb = Number(import.meta?.env?.VITE_UPLOAD_MAX_SIZE_MB) || 100;
   
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -260,7 +262,7 @@ export default function CourseContent() {
               className="btn-gradient rounded-full px-5 py-3 h-auto font-semibold whitespace-nowrap"
             >
               <Plus className="w-5 h-5 mr-2" />
-              Add Content
+              {isVideosPage ? "Add Video" : "Add Content"}
             </Button>
           </div>
 
@@ -269,7 +271,7 @@ export default function CourseContent() {
             <div className="relative flex-1 max-w-md w-full">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500" />
               <Input
-                placeholder="Search content..."
+                placeholder={isVideosPage ? "Search videos..." : "Search content..."}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-12 h-12 bg-white/5 border-white/10 rounded-xl text-white placeholder:text-gray-500 focus:border-purple-500/50 focus:ring-purple-500/20 w-full"
@@ -314,16 +316,24 @@ export default function CourseContent() {
               className="text-center py-20"
             >
               <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-pink-500/20 via-purple-500/20 to-blue-500/20 flex items-center justify-center mx-auto mb-6">
-                <FileText className="w-10 h-10 text-purple-400" />
+                {isVideosPage ? (
+                  <Video className="w-10 h-10 text-purple-400" />
+                ) : (
+                  <FileText className="w-10 h-10 text-purple-400" />
+                )}
               </div>
-              <h3 className="text-xl font-semibold mb-2">No content yet</h3>
-              <p className="text-gray-400 mb-6">Add your first {CATEGORY_LABELS[category]?.toLowerCase()} item</p>
+              <h3 className="text-xl font-semibold mb-2">{isVideosPage ? "No videos yet" : "No content yet"}</h3>
+              <p className="text-gray-400 mb-6">
+                {isVideosPage
+                  ? "Add your first video to start building course context"
+                  : `Add your first ${CATEGORY_LABELS[category]?.toLowerCase()} item`}
+              </p>
               <Button
                 onClick={() => setIsAddDialogOpen(true)}
                 className="btn-gradient rounded-full px-6 py-3 h-auto font-semibold"
               >
                 <Plus className="w-4 h-4 mr-2" />
-                Add Content
+                {isVideosPage ? "Add Video" : "Add Content"}
               </Button>
             </motion.div>
           ) : (
@@ -390,8 +400,8 @@ export default function CourseContent() {
                               onClick={() => handleViewFile(item)}
                               className="inline-flex items-center gap-2 text-sm text-purple-400 hover:text-purple-300 transition-colors"
                             >
-                              <File className="w-4 h-4" />
-                              View File
+                              {isVideo ? <Video className="w-4 h-4" /> : <File className="w-4 h-4" />}
+                              {isVideo ? "View Video" : "View File"}
                             </button>
                           )}
 
@@ -451,9 +461,13 @@ export default function CourseContent() {
       <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
         <DialogContent className="bg-[#131313] border-white/10 text-white max-w-md">
           <DialogHeader>
-            <DialogTitle className="text-xl font-bold">Add {CATEGORY_LABELS[category]}</DialogTitle>
+            <DialogTitle className="text-xl font-bold">
+              {isVideosPage ? "Add Video" : `Add ${CATEGORY_LABELS[category]}`}
+            </DialogTitle>
             <DialogDescription className="text-gray-400">
-              Add a new item to this course category. Attach a PDF to enable retrieval-augmented answers in chat.
+              {isVideosPage
+                ? "Upload a new video so ClassMate can follow along with your course."
+                : "Add a new item to this course category. Attach a PDF to enable retrieval-augmented answers in chat."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-5 pt-4">
@@ -476,11 +490,12 @@ export default function CourseContent() {
               />
             </div>
             <div>
-              <Label className="text-gray-300 mb-2 block">Upload File</Label>
+              <Label className="text-gray-300 mb-2 block">{isVideosPage ? "Upload Video" : "Upload File"}</Label>
               <div className="relative">
                 <input
                   type="file"
                   onChange={handleFileChange}
+                  accept={isVideosPage ? "video/*" : undefined}
                   className="hidden"
                   id="file-upload"
                 />
@@ -507,11 +522,25 @@ export default function CourseContent() {
                   ) : (
                     <div className="text-center">
                       <Upload className="w-6 h-6 text-gray-500 mx-auto mb-2" />
-                      <span className="text-sm text-gray-400">Click to upload</span>
+                      <span className="text-sm text-gray-400">
+                        {isVideosPage ? "Click to upload a video" : "Click to upload"}
+                      </span>
                     </div>
                   )}
                 </label>
               </div>
+              {isVideosPage && (
+                <div className="mt-2 text-xs text-gray-400 leading-relaxed">
+                  <div>
+                    Supported formats: <span className="text-gray-200">MP4</span>,{" "}
+                    <span className="text-gray-200">MOV</span>,{" "}
+                    <span className="text-gray-200">WebM</span>.
+                  </div>
+                  <div>
+                    Max size: <span className="text-gray-200">{videoUploadMaxSizeMb}MB</span>.
+                  </div>
+                </div>
+              )}
             </div>
             <Button
               onClick={handleCreate}
@@ -524,7 +553,7 @@ export default function CourseContent() {
                   {isUploading ? "Uploading..." : "Creating..."}
                 </span>
               ) : (
-                "Add Content"
+                isVideosPage ? "Add Video" : "Add Content"
               )}
             </Button>
           </div>
