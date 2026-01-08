@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any
 from uuid import UUID
@@ -171,6 +172,14 @@ async def ingest_pptx_content_to_db(*, content_id: UUID) -> None:
         if not _is_pptx(content):
             return
 
+        # Mark processing (best-effort status tracking).
+        content.ingestion_status = "processing"
+        content.ingestion_warning = None
+        content.ingestion_error = None
+        content.ingestion_started_at = datetime.now(timezone.utc)
+        content.ingestion_completed_at = None
+        await db.commit()
+
         course_id = content.course_id
         category = content.category
         file_key = content.file_key
@@ -181,11 +190,27 @@ async def ingest_pptx_content_to_db(*, content_id: UUID) -> None:
         obj = s3.get_object(Bucket=settings.s3_bucket, Key=file_key)
         body = obj.get("Body")
         pptx_bytes = body.read() if body is not None else b""
-    except Exception:
+    except Exception as e:
+        async with SessionLocal() as db:
+            res = await db.execute(select(CourseContent).where(CourseContent.id == content_id))
+            c = res.scalar_one_or_none()
+            if c is not None:
+                c.ingestion_status = "error"
+                c.ingestion_error = str(e)
+                c.ingestion_completed_at = datetime.now(timezone.utc)
+                await db.commit()
         return
 
     slides = _extract_pptx_slides(pptx_bytes)
     if not slides:
+        async with SessionLocal() as db:
+            res = await db.execute(select(CourseContent).where(CourseContent.id == content_id))
+            c = res.scalar_one_or_none()
+            if c is not None:
+                c.ingestion_status = "warning"
+                c.ingestion_warning = "no_slides_extracted"
+                c.ingestion_completed_at = datetime.now(timezone.utc)
+                await db.commit()
         return
 
     splitter = _text_splitter(settings)
@@ -262,6 +287,18 @@ async def ingest_pptx_content_to_db(*, content_id: UUID) -> None:
             db.add_all(page_rows)
         if chunk_rows:
             db.add_all(chunk_rows)
+
+        res = await db.execute(select(CourseContent).where(CourseContent.id == content_id))
+        c = res.scalar_one_or_none()
+        if c is not None:
+            if low_text:
+                c.ingestion_status = "warning"
+                c.ingestion_warning = "low_text_extracted"
+            else:
+                c.ingestion_status = "done"
+                c.ingestion_warning = None
+            c.ingestion_error = None
+            c.ingestion_completed_at = datetime.now(timezone.utc)
         await db.commit()
 
 

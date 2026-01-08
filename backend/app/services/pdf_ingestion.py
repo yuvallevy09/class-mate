@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any
 from uuid import UUID
@@ -100,6 +101,14 @@ async def ingest_pdf_content_to_db(*, content_id: UUID) -> None:
         if not _is_pdf(content):
             return
 
+        # Mark processing (best-effort status tracking).
+        content.ingestion_status = "processing"
+        content.ingestion_warning = None
+        content.ingestion_error = None
+        content.ingestion_started_at = datetime.now(timezone.utc)
+        content.ingestion_completed_at = None
+        await db.commit()
+
         course_id = content.course_id
         category = content.category
         file_key = content.file_key
@@ -111,11 +120,27 @@ async def ingest_pdf_content_to_db(*, content_id: UUID) -> None:
         obj = s3.get_object(Bucket=settings.s3_bucket, Key=file_key)
         body = obj.get("Body")
         pdf_bytes = body.read() if body is not None else b""
-    except Exception:
+    except Exception as e:
+        async with SessionLocal() as db:
+            res = await db.execute(select(CourseContent).where(CourseContent.id == content_id))
+            c = res.scalar_one_or_none()
+            if c is not None:
+                c.ingestion_status = "error"
+                c.ingestion_error = str(e)
+                c.ingestion_completed_at = datetime.now(timezone.utc)
+                await db.commit()
         return
 
     pages = _extract_pdf_pages(pdf_bytes)
     if not pages:
+        async with SessionLocal() as db:
+            res = await db.execute(select(CourseContent).where(CourseContent.id == content_id))
+            c = res.scalar_one_or_none()
+            if c is not None:
+                c.ingestion_status = "warning"
+                c.ingestion_warning = "no_pages_extracted"
+                c.ingestion_completed_at = datetime.now(timezone.utc)
+                await db.commit()
         return
 
     splitter = _text_splitter(settings)
@@ -172,6 +197,20 @@ async def ingest_pdf_content_to_db(*, content_id: UUID) -> None:
             db.add_all(page_rows)
         if chunk_rows:
             db.add_all(chunk_rows)
+
+        # Mark done/warning depending on extracted text volume.
+        total_chars = sum(len((r.text or "").strip()) for r in page_rows)
+        res = await db.execute(select(CourseContent).where(CourseContent.id == content_id))
+        c = res.scalar_one_or_none()
+        if c is not None:
+            if total_chars < 200:
+                c.ingestion_status = "warning"
+                c.ingestion_warning = "low_text_extracted"
+            else:
+                c.ingestion_status = "done"
+                c.ingestion_warning = None
+            c.ingestion_error = None
+            c.ingestion_completed_at = datetime.now(timezone.utc)
         await db.commit()
 
 

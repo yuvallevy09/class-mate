@@ -106,6 +106,8 @@ async def test_pptx_ingestion_writes_pages_and_chunks(monkeypatch) -> None:
         await pptx_ingestion.ingest_pptx_content_to_db(content_id=content.id)
 
         async with SessionLocal() as session:
+            refreshed = (await session.execute(select(CourseContent).where(CourseContent.id == content.id))).scalar_one()
+            assert refreshed.ingestion_status in {"done", "warning"}
             pages = (
                 await session.execute(
                     select(DocumentPage).where(DocumentPage.content_id == content.id).order_by(DocumentPage.page_no.asc())

@@ -90,6 +90,9 @@ async def create_course_content(
         mime_type=body.mime_type,
         size_bytes=body.size_bytes,
     )
+    # If this item has an attached file and ingestion is enabled, mark as queued.
+    if body.file_key and settings.rag_enabled:
+        content.ingestion_status = "queued"
     db.add(content)
     await db.commit()
     await db.refresh(content)

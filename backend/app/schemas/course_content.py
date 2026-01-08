@@ -60,6 +60,12 @@ class CourseContentPublic(BaseModel):
     mime_type: str | None
     size_bytes: int | None
 
+    ingestion_status: str
+    ingestion_warning: str | None = None
+    ingestion_error: str | None = None
+    ingestion_started_at: datetime | None = None
+    ingestion_completed_at: datetime | None = None
+
     created_at: datetime
 
 

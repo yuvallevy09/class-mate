@@ -19,6 +19,14 @@ def _is_pptx_like(content: CourseContent) -> bool:
     return name.endswith(".pptx")
 
 
+def _is_pdf_like(content: CourseContent) -> bool:
+    mt = (content.mime_type or "").lower().strip()
+    name = (content.original_filename or "").lower().strip()
+    if "pdf" in mt:
+        return True
+    return name.endswith(".pdf")
+
+
 async def ingest_content_to_db(*, content_id: UUID) -> None:
     """
     Dispatcher: ingest a file-backed course content item into Postgres retrieval tables.
@@ -37,10 +45,13 @@ async def ingest_content_to_db(*, content_id: UUID) -> None:
         if content is None or not content.file_key:
             return
 
-    # Decide based on mime/extension. PDF ingestion also checks internally.
+    # Decide based on mime/extension.
     if _is_pptx_like(content):
         await ingest_pptx_content_to_db(content_id=content_id)
-    else:
+    elif _is_pdf_like(content):
         await ingest_pdf_content_to_db(content_id=content_id)
+    else:
+        # Unsupported file type for ingestion; leave status untouched.
+        return
 
 

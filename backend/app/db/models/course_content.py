@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, func, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -32,6 +32,20 @@ class CourseContent(Base):
     original_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
     size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+    # Ingestion lifecycle for file-backed content items (PDF/PPTX etc.)
+    # Values: none | queued | processing | done | warning | error
+    ingestion_status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="none",  # Python-side default (DB default is intentionally not relied on)
+        server_default=text("'none'"),
+        index=True,
+    )
+    ingestion_warning: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ingestion_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ingestion_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ingestion_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
