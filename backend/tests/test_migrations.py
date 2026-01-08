@@ -45,6 +45,28 @@ async def _users_table_exists(database_url: str) -> bool:
         await engine.dispose()
 
 
+async def _table_exists(database_url: str, *, table_name: str) -> bool:
+    engine = create_async_engine(database_url, pool_pre_ping=True)
+    try:
+        async with engine.connect() as conn:
+            res = await conn.execute(
+                text(
+                    """
+                    SELECT EXISTS (
+                      SELECT 1
+                      FROM information_schema.tables
+                      WHERE table_schema = 'public'
+                        AND table_name = :name
+                    ) AS exists;
+                    """
+                ),
+                {"name": table_name},
+            )
+            return bool(res.scalar())
+    finally:
+        await engine.dispose()
+
+
 def test_alembic_upgrade_creates_users_table() -> None:
     settings = get_settings()
 
@@ -61,5 +83,7 @@ def test_alembic_upgrade_creates_users_table() -> None:
     command.upgrade(cfg, "head")
 
     assert asyncio.run(_users_table_exists(settings.database_url)) is True
+    assert asyncio.run(_table_exists(settings.database_url, table_name="document_pages")) is True
+    assert asyncio.run(_table_exists(settings.database_url, table_name="content_chunks")) is True
 
 
