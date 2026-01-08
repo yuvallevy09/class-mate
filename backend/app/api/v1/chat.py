@@ -15,6 +15,7 @@ from app.db.models.chat_message import ChatMessage
 from app.db.models.course import Course
 from app.db.models.user import User
 from app.db.session import get_db
+from app.rag.pg_retrieve import retrieve_course_chunk_hits
 from app.schemas.chat import CourseChatRequest, CourseChatResponse
 from app.schemas.chat_persistence import ChatConversationPublic, ChatMessagePublic
 
@@ -78,7 +79,22 @@ async def course_chat(
     # Persist user message.
     db.add(ChatMessage(conversation_id=conversation.id, role="user", content=body.message))
 
-    # Phase 1: real LLM reply (no RAG yet). Keep API contract stable.
+    # Retrieval: Postgres single source of truth (FTS).
+    # Router-selected categories will be added later; for now search across all categories.
+    rag_hits = []
+    if settings.rag_enabled:
+        try:
+            rag_hits = await retrieve_course_chunk_hits(
+                db=db,
+                course_id=course.id,
+                query=body.message,
+                top_k=int(settings.rag_top_k),
+                categories=None,
+            )
+        except Exception:
+            rag_hits = []
+
+    # LLM reply (with optional RAG context).
     try:
         engine = ChatEngine(settings)
         # Best-effort: if this is a brand new conversation, generate a short title from the first message.
@@ -101,6 +117,7 @@ async def course_chat(
             course_description=course.description,
             history=history,
             user_message=body.message,
+            rag_hits=rag_hits,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(e)) from e

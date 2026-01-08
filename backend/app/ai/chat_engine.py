@@ -9,6 +9,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.core.settings import Settings
 from app.rag.retrieve import retrieve_course_hits
+from app.rag.types import RagHit
 from app.schemas.chat import ChatCitation
 
 
@@ -72,8 +73,18 @@ class ChatEngine:
             src = []
             if meta.get("original_filename"):
                 src.append(str(meta["original_filename"]))
-            if meta.get("page"):
-                src.append(f"p.{meta['page']}")
+            # PDF/PPTX chunk citations (Postgres retrieval layer uses page_start/page_end).
+            if meta.get("page_start") or meta.get("page_end"):
+                try:
+                    ps = int(meta.get("page_start") or meta.get("page_end") or 0)
+                    pe = int(meta.get("page_end") or meta.get("page_start") or ps)
+                    if ps and pe:
+                        if meta.get("source_kind") == "pptx" and meta.get("slide_no"):
+                            # Prefer slide citation for PPTX (but keep page range too).
+                            src.append(f"slide.{int(meta.get('slide_no'))}")
+                        src.append(f"p.{ps}" if ps == pe else f"p.{ps}-{pe}")
+                except Exception:
+                    pass
             if meta.get("video_asset_id"):
                 # Video transcript segment (video asset)
                 try:
@@ -100,6 +111,10 @@ class ChatEngine:
             # Video metadata (best-effort)
             extra = {
                 "page": meta.get("page"),
+                "pageStart": meta.get("page_start"),
+                "pageEnd": meta.get("page_end"),
+                "sourceKind": meta.get("source_kind"),
+                "slideNo": meta.get("slide_no"),
                 "original_filename": meta.get("original_filename"),
                 "score": hit.score,
                 "doc_type": meta.get("doc_type"),
@@ -225,6 +240,7 @@ class ChatEngine:
         course_description: str | None,
         history: list[ChatHistoryItem],
         user_message: str,
+        rag_hits: list[RagHit] | None = None,
     ) -> tuple[str, list[ChatCitation]]:
         # Hard cap: enforce the last N history items at the engine boundary.
         max_n = int(self._settings.chat_history_max_messages)
@@ -241,8 +257,12 @@ class ChatEngine:
 
         citations: list[ChatCitation] = []
 
-        # RAG (best-effort): load per-course persisted index and inject context.
-        if self._settings.rag_enabled and user_id and course_id:
+        # RAG (best-effort): allow caller to provide hits (e.g. Postgres retrieval layer).
+        # If not provided, fallback to the legacy Chroma-based retrieval.
+        hits: list[RagHit] = []
+        if rag_hits is not None:
+            hits = rag_hits
+        elif self._settings.rag_enabled and user_id and course_id:
             try:
                 hits = retrieve_course_hits(
                     settings=self._settings,
@@ -254,11 +274,11 @@ class ChatEngine:
             except Exception:
                 hits = []
 
-            if hits:
-                rag_prompt = self._build_rag_context_prompt(hits)
-                # Insert after base system prompt.
-                messages.insert(1, SystemMessage(content=rag_prompt))
-                citations = self._hits_to_citations(hits)
+        if hits:
+            rag_prompt = self._build_rag_context_prompt(hits)
+            # Insert after base system prompt.
+            messages.insert(1, SystemMessage(content=rag_prompt))
+            citations = self._hits_to_citations(hits)
 
         res = await llm.ainvoke(messages)
         text = (getattr(res, "content", "") or "").strip()
