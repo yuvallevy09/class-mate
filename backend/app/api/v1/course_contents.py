@@ -17,7 +17,7 @@ from app.db.models.course_content import CourseContent
 from app.db.models.video_asset import VideoAsset
 from app.db.models.user import User
 from app.db.session import get_db
-from app.services.pdf_ingestion import ingest_pdf_content_to_db
+from app.services.content_ingestion import ingest_content_to_db
 from app.schemas.course_content import CourseContentCreate, CourseContentPublic
 
 router = APIRouter(tags=["course-contents"])
@@ -97,7 +97,7 @@ async def create_course_content(
     # Ingestion trigger: build Postgres retrieval corpus for PDF uploads.
     # BackgroundTasks runs in-process; heavy work is isolated from the request DB session.
     if content.file_key and settings.rag_enabled:
-        background_tasks.add_task(ingest_pdf_content_to_db, content_id=content.id)
+        background_tasks.add_task(ingest_content_to_db, content_id=content.id)
 
     return content
 
