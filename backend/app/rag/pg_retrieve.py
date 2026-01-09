@@ -19,12 +19,11 @@ async def retrieve_course_chunk_hits(
     categories: Sequence[str] | None = None,
 ) -> list[RagHit]:
     """
-    Postgres FTS retrieval over `content_chunks`.
+    Postgres BM25 retrieval over `content_chunks` using `pg_textsearch`.
 
     - Scopes to a single course_id (your chats are course-scoped)
     - Optionally filters to router-selected category(ies)
-    - Uses websearch_to_tsquery('simple', q) for language-agnostic parsing
-    - Ranks via ts_rank_cd
+    - Ranks via BM25
     """
     q = (query or "").strip()
     if not q:
@@ -34,13 +33,13 @@ async def retrieve_course_chunk_hits(
     if k <= 0:
         return []
 
-    tsquery = func.websearch_to_tsquery("simple", q)
-    rank = func.ts_rank_cd(ContentChunk.tsv, tsquery).label("rank")
+    # pg_textsearch requires a BM25 index. We pin the index name in the query builder
+    # so behavior is deterministic and the extension can locate the right index.
+    bm25q = func.to_bm25query(q, "content_chunks_bm25_idx")
+    score_expr = ContentChunk.text.op("<@>")(bm25q)
+    rank = score_expr.label("rank")
 
-    stmt = select(ContentChunk, rank).where(
-        ContentChunk.course_id == course_id,
-        ContentChunk.tsv.op("@@")(tsquery),
-    )
+    stmt = select(ContentChunk, rank).where(ContentChunk.course_id == course_id)
 
     if categories:
         cats = [str(c).strip() for c in categories if str(c).strip()]

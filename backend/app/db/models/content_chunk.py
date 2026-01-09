@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Computed, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy import text as sa_text
-from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -18,7 +18,7 @@ class ContentChunk(Base):
     This table is intended to be the single source of truth for retrieval:
     - filter by course_id (always)
     - filter by category (router-selected types)
-    - search via generated tsvector (FTS)
+    - search via BM25 ranking (pg_textsearch)
     - later: add pgvector embeddings (nullable column + backfill)
     """
 
@@ -47,13 +47,6 @@ class ContentChunk(Base):
         JSONB,
         nullable=False,
         server_default=sa_text("'{}'::jsonb"),
-    )
-
-    # Generated in DB (stored). Mark as computed so ORM doesn't try to insert it.
-    tsv: Mapped[str] = mapped_column(
-        TSVECTOR,
-        Computed("to_tsvector('simple', coalesce(text, ''))", persisted=True),
-        nullable=False,
     )
 
     created_at: Mapped[datetime] = mapped_column(

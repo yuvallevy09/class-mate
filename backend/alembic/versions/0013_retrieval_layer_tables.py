@@ -1,4 +1,4 @@
-"""Create retrieval-layer tables (document_pages, content_chunks) with simple FTS
+"""Create retrieval-layer tables (document_pages, content_chunks) with BM25 text search
 
 Revision ID: 0013_retrieval_layer
 Revises: 0012_cc_category_check
@@ -6,7 +6,7 @@ Create Date: 2026-01-08
 
 These tables make Postgres the single source of truth for RAG retrieval.
 - document_pages: per-page extracted PDF text for debugging and page-accurate citations
-- content_chunks: unified chunk corpus across all content types, with generated tsvector for FTS
+- content_chunks: unified chunk corpus across all content types, indexed for BM25 ranking via pg_textsearch
 
 Embeddings (pgvector) are intentionally NOT included in this migration; add later as a nullable
 column + backfill job.
@@ -28,6 +28,10 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Ensure pg_textsearch exists before creating BM25 indexes.
+    # (docker-entrypoint-initdb.d creates it too, but migrations should be self-contained.)
+    op.execute("CREATE EXTENSION IF NOT EXISTS pg_textsearch;")
+
     # document_pages: page-level extracted text (PDFs)
     op.create_table(
         "document_pages",
@@ -51,7 +55,7 @@ def upgrade() -> None:
     op.create_index("ix_document_pages_course_id", "document_pages", ["course_id"], unique=False)
     op.create_index("ix_document_pages_content_id", "document_pages", ["content_id"], unique=False)
 
-    # content_chunks: unified retrieval corpus (FTS now; embeddings later)
+    # content_chunks: unified retrieval corpus (BM25 now; embeddings later)
     op.create_table(
         "content_chunks",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False),
@@ -61,13 +65,6 @@ def upgrade() -> None:
         sa.Column("chunk_index", sa.Integer(), nullable=False),
         sa.Column("text", sa.Text(), nullable=False),
         sa.Column("metadata", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb")),
-        # Generated tsvector using SIMPLE config (language-agnostic).
-        sa.Column(
-            "tsv",
-            postgresql.TSVECTOR(),
-            sa.Computed("to_tsvector('simple', coalesce(text, ''))", persisted=True),
-            nullable=False,
-        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -82,11 +79,16 @@ def upgrade() -> None:
     op.create_index("ix_content_chunks_course_id", "content_chunks", ["course_id"], unique=False)
     op.create_index("ix_content_chunks_content_id", "content_chunks", ["content_id"], unique=False)
     op.create_index("ix_content_chunks_course_category", "content_chunks", ["course_id", "category"], unique=False)
-    op.create_index("gin_content_chunks_tsv", "content_chunks", ["tsv"], unique=False, postgresql_using="gin")
+    # BM25 index over raw text (language-agnostic SIMPLE config).
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS content_chunks_bm25_idx "
+        "ON content_chunks USING bm25 (text) "
+        "WITH (text_config = 'simple')"
+    )
 
 
 def downgrade() -> None:
-    op.drop_index("gin_content_chunks_tsv", table_name="content_chunks")
+    op.execute("DROP INDEX IF EXISTS content_chunks_bm25_idx")
     op.drop_index("ix_content_chunks_course_category", table_name="content_chunks")
     op.drop_index("ix_content_chunks_content_id", table_name="content_chunks")
     op.drop_index("ix_content_chunks_course_id", table_name="content_chunks")
