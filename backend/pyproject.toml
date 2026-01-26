@@ -22,6 +22,7 @@ dependencies = [
   "pypdf>=4.0,<6.0",
   "sentence-transformers>=2.6,<4.0",
   "langchain-huggingface>=0.3.1",
+  "dspy-ai>=2.6,<3.0",
 ]
 
 [dependency-groups]

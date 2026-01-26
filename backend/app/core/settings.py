@@ -82,6 +82,11 @@ class Settings(BaseSettings):
         validation_alias="RAG_LOCAL_EMBEDDING_MODEL",
     )
 
+    # DSPy router (intent routing for retrieval vs general answering)
+    dspy_router_enabled: bool = Field(default=False, validation_alias="DSPY_ROUTER_ENABLED")
+    # DSPy uses LiteLLM-style model identifiers.
+    dspy_router_model: str = Field(default="gemini/gemini-2.0-flash", validation_alias="DSPY_ROUTER_MODEL")
+
     # JWT / cookies
     jwt_secret: str = Field(default="dev-change-me", validation_alias="JWT_SECRET")
     jwt_access_ttl_seconds: int = Field(default=900, validation_alias="JWT_ACCESS_TTL_SECONDS")

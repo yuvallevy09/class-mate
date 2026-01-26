@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.chat_engine import ChatEngine, ChatHistoryItem
+from app.ai.dspy_router import route_message
 from app.api.deps import get_current_user
 from app.core.settings import Settings, get_settings
 from app.db.models.chat_conversation import ChatConversation
@@ -79,10 +80,24 @@ async def course_chat(
     # Persist user message.
     db.add(ChatMessage(conversation_id=conversation.id, role="user", content=body.message))
 
-    # Retrieval: Postgres single source of truth (FTS).
-    # Router-selected categories will be added later; for now search across all categories.
+    # Optional DSPy router: decide whether to retrieve course content or answer generally.
+    should_retrieve = bool(settings.rag_enabled)
+    if settings.dspy_router_enabled:
+        history_summary = "\n".join([f"{h.role}: {h.content}" for h in history[-6:]]).strip()
+        decision = route_message(
+            settings=settings,
+            course_name=str(course.name),
+            course_description=str(course.description or ""),
+            history=history_summary,
+            message=str(body.message),
+        )
+        # Retrieve for course-specific and mixed queries.
+        should_retrieve = bool(settings.rag_enabled) and bool(decision.needs_course_retrieval)
+
+    # Retrieval: Postgres single source of truth (BM25).
+    # (Hybrid retrieval + RRF will be added next.)
     rag_hits = []
-    if settings.rag_enabled:
+    if should_retrieve:
         try:
             rag_hits = await retrieve_course_chunk_hits(
                 db=db,
