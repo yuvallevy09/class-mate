@@ -3,22 +3,22 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
-import shutil
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.settings import Settings, get_settings
+from app.db.models.content_chunk import ContentChunk
 from app.db.models.course import Course
 from app.db.models.course_content import CourseContent
 from app.db.models.user import User
 from app.db.session import get_db
-from app.rag.ingest import index_course_for_user
-from app.rag.paths import course_persist_dir
-from app.rag.retrieve import retrieve_course_hits
+from app.rag.embeddings import get_embeddings
+from app.rag.embedding_config import EMBEDDING_DIMS
+from app.rag.pg_retrieve import retrieve_course_chunk_hits
 
 router = APIRouter(tags=["rag"])
 
@@ -29,16 +29,21 @@ class RagStatusResponse(BaseModel):
     embeddings_provider: str
     embeddings_model: str | None
     s3_configured: bool
-    index_dir: str
-    index_exists: bool
-    index_last_modified_at: datetime | None
     course_file_count: int
     course_pdf_count: int
+    chunks_total: int
+    chunks_with_embeddings: int
 
 
 class RagQueryResponse(BaseModel):
     hits: list[dict]
 
+
+class RagLexicalQueryResponse(BaseModel):
+    hits: list[dict]
+
+class RagSemanticQueryResponse(BaseModel):
+    hits: list[dict]
 
 async def _ensure_owned_course(db: AsyncSession, *, course_id: UUID, user_id: int) -> Course:
     res = await db.execute(select(Course).where(Course.id == course_id, Course.user_id == user_id))
@@ -54,6 +59,16 @@ def _embeddings_configured(settings: Settings) -> bool:
     if provider == "hf":
         try:
             from langchain_huggingface import HuggingFaceEmbeddings  # noqa: F401
+        except Exception:
+            return False
+        return True
+
+    if provider == "openai":
+        api_key = (getattr(settings, "openai_api_key", None) or "").strip()
+        if not api_key:
+            return False
+        try:
+            from langchain_openai import OpenAIEmbeddings  # noqa: F401
         except Exception:
             return False
         return True
@@ -91,17 +106,17 @@ async def rag_status(
         if ("pdf" in mt) or name.endswith(".pdf"):
             pdf_count += 1
 
-    persist_dir = course_persist_dir(
-        rag_store_dir=settings.rag_store_dir, user_id=int(current_user.id), course_id=course_id
+    # Chunk stats (retrieval corpus lives in Postgres now).
+    cres = await db.execute(
+        select(func.count(ContentChunk.id)).where(ContentChunk.course_id == course_id)
     )
-    exists = persist_dir.exists()
-    last_modified: datetime | None = None
-    if exists:
-        try:
-            ts = persist_dir.stat().st_mtime
-            last_modified = datetime.fromtimestamp(ts, tz=timezone.utc)
-        except Exception:
-            last_modified = None
+    chunks_total = int(cres.scalar() or 0)
+    eres = await db.execute(
+        select(func.count(ContentChunk.id)).where(
+            ContentChunk.course_id == course_id, ContentChunk.embedding.is_not(None)
+        )
+    )
+    chunks_with_embeddings = int(eres.scalar() or 0)
 
     return RagStatusResponse(
         rag_enabled=bool(settings.rag_enabled),
@@ -113,59 +128,11 @@ async def rag_status(
             else str(getattr(settings, "rag_embedding_model", None))
         ),
         s3_configured=bool(settings.s3_bucket),
-        index_dir=str(persist_dir),
-        index_exists=exists,
-        index_last_modified_at=last_modified,
         course_file_count=file_count,
         course_pdf_count=pdf_count,
+        chunks_total=chunks_total,
+        chunks_with_embeddings=chunks_with_embeddings,
     )
-
-
-@router.post("/courses/{course_id}/rag/reindex")
-async def rag_reindex(
-    course_id: UUID,
-    background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    settings: Settings = Depends(get_settings),
-) -> dict:
-    await _ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
-
-    if not settings.rag_enabled:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="RAG is disabled (RAG_ENABLED=false)")
-    if not settings.s3_bucket:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="S3 is not configured (missing S3_BUCKET); cannot reindex",
-        )
-
-    background_tasks.add_task(index_course_for_user, user_id=int(current_user.id), course_id=course_id)
-    return {"ok": True}
-
-
-@router.post("/courses/{course_id}/rag/clear")
-async def rag_clear(
-    course_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    settings: Settings = Depends(get_settings),
-) -> dict:
-    """
-    Dev-only helper: delete the persisted on-disk index for this course.
-    Useful when switching embedding models/providers (vectors are not compatible).
-    """
-    await _ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
-
-    persist_dir = course_persist_dir(
-        rag_store_dir=settings.rag_store_dir, user_id=int(current_user.id), course_id=course_id
-    )
-    if persist_dir.exists():
-        try:
-            shutil.rmtree(persist_dir)
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to clear index") from e
-    return {"ok": True}
-
 
 @router.get("/courses/{course_id}/rag/query", response_model=RagQueryResponse)
 async def rag_query(
@@ -178,8 +145,8 @@ async def rag_query(
     settings: Settings = Depends(get_settings),
 ) -> RagQueryResponse:
     """
-    Debug endpoint: run retrieval only (no LLM) to verify the vector index is populated
-    and relevant to a query.
+    Debug endpoint: semantic retrieval only (no LLM) using pgvector cosine distance over
+    `content_chunks.embedding`.
     """
     await _ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
 
@@ -189,39 +156,52 @@ async def rag_query(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="q is required")
 
     try:
-        where = {"doc_type": doc_type.strip()} if doc_type and doc_type.strip() else None
-        hits = retrieve_course_hits(
-            settings=settings,
-            user_id=int(current_user.id),
-            course_id=course_id,
-            query=q.strip(),
-            top_k=int(top_k),
-            where=where,
-        )
+        emb = get_embeddings(settings)
+        qvec = emb.embed_query(q.strip())
     except Exception as e:
-        # Common failure mode in local dev: embeddings provider rejects requests due to quota/billing.
-        msg = str(e)
-        if "ResourceExhausted" in msg or "Quota exceeded" in msg or "429" in msg:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=(
-                    "Embeddings request failed due to quota/billing limits. "
-                    "Your RAG index may exist on disk, but retrieval requires embedding the query. "
-                    "Enable Gemini embeddings quota/billing for your API key (or switch to a local embeddings provider)."
-                ),
-            ) from e
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="RAG retrieval failed") from e
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to embed query") from e
+
+    if not isinstance(qvec, list) or len(qvec) != EMBEDDING_DIMS:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Query embedding has unexpected dimension (expected {EMBEDDING_DIMS}).",
+        )
+
+    qlit = "[" + ",".join(f"{float(x):.9g}" for x in qvec) + "]"
+    k = int(top_k)
+    if k <= 0:
+        return RagQueryResponse(hits=[])
+
+    sql = """
+    SELECT
+      content_id,
+      text,
+      metadata,
+      (embedding <=> :qvec::vector) AS distance
+    FROM content_chunks
+    WHERE course_id = :course_id
+      AND embedding IS NOT NULL
+    """
+    params: dict = {"course_id": str(course_id), "qvec": qlit, "k": k}
+    if doc_type and doc_type.strip():
+        sql += " AND (metadata->>'doc_type') = :doc_type\n"
+        params["doc_type"] = doc_type.strip()
+    sql += " ORDER BY (embedding <=> :qvec::vector) ASC LIMIT :k"
+
+    res = await db.execute(sa_text(sql), params)
+    rows = res.mappings().all()
 
     # Return a safe, JSON-friendly view (avoid leaking huge payloads).
     out: list[dict] = []
-    for h in hits:
-        meta = dict(h.metadata or {})
+    for r in rows:
+        meta = dict(r.get("metadata") or {})
+        dist = float(r.get("distance") or 0.0)
         out.append(
             {
-                "text": (h.text or "")[:800],
-                "score": h.score,
+                "text": (str(r.get("text") or ""))[:800],
+                "score": 1.0 - dist,
                 "metadata": {
-                    "content_id": meta.get("content_id"),
+                    "content_id": meta.get("content_id") or str(r.get("content_id")),
                     "title": meta.get("title"),
                     "original_filename": meta.get("original_filename"),
                     "page": meta.get("page"),
@@ -235,5 +215,61 @@ async def rag_query(
         )
 
     return RagQueryResponse(hits=out)
+
+
+@router.get("/courses/{course_id}/rag/lexical_query", response_model=RagLexicalQueryResponse)
+async def rag_lexical_query(
+    course_id: UUID,
+    q: str,
+    top_k: int = 8,
+    categories: list[str] | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+) -> RagLexicalQueryResponse:
+    """
+    Debug endpoint: run lexical retrieval only (no LLM) using Postgres BM25 (pg_textsearch)
+    over the `content_chunks` table.
+    """
+    await _ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
+
+    if not settings.rag_enabled:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="RAG is disabled (RAG_ENABLED=false)")
+    if not q or not q.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="q is required")
+
+    hits = await retrieve_course_chunk_hits(
+        db=db,
+        course_id=course_id,
+        query=q.strip(),
+        top_k=int(top_k),
+        categories=categories,
+    )
+
+    out: list[dict] = []
+    for h in hits:
+        meta = dict(h.metadata or {})
+        out.append(
+            {
+                "text": (h.text or "")[:800],
+                "score": h.score,
+                "metadata": {
+                    "content_id": meta.get("content_id"),
+                    "course_id": meta.get("course_id"),
+                    "category": meta.get("category"),
+                    # Optional ingestion-provided fields (may be absent depending on source type).
+                    "title": meta.get("title"),
+                    "original_filename": meta.get("original_filename"),
+                    "page": meta.get("page"),
+                    "doc_type": meta.get("doc_type"),
+                    "video_asset_id": meta.get("video_asset_id"),
+                    "start_sec": meta.get("start_sec"),
+                    "end_sec": meta.get("end_sec"),
+                    "language_code": meta.get("language_code"),
+                },
+            }
+        )
+
+    return RagLexicalQueryResponse(hits=out)
 
 

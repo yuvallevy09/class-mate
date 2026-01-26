@@ -8,7 +8,6 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.core.settings import Settings
-from app.rag.retrieve import retrieve_course_hits
 from app.rag.types import RagHit
 from app.schemas.chat import ChatCitation
 
@@ -257,22 +256,10 @@ class ChatEngine:
 
         citations: list[ChatCitation] = []
 
-        # RAG (best-effort): allow caller to provide hits (e.g. Postgres retrieval layer).
-        # If not provided, fallback to the legacy Chroma-based retrieval.
+        # RAG (best-effort): caller provides hits from the Postgres retrieval layer.
         hits: list[RagHit] = []
         if rag_hits is not None:
             hits = rag_hits
-        elif self._settings.rag_enabled and user_id and course_id:
-            try:
-                hits = retrieve_course_hits(
-                    settings=self._settings,
-                    user_id=int(user_id),
-                    course_id=course_id,
-                    query=user_message,
-                    top_k=int(self._settings.rag_top_k),
-                )
-            except Exception:
-                hits = []
 
         if hits:
             rag_prompt = self._build_rag_context_prompt(hits)

@@ -57,12 +57,14 @@ class Settings(BaseSettings):
     google_api_key: str | None = Field(default=None, validation_alias="GOOGLE_API_KEY")
     gemini_api_key: str | None = Field(default=None, validation_alias="GEMINI_API_KEY")
     gemini_model: str = Field(default="gemini-2.5-flash", validation_alias="GEMINI_MODEL")
+
+    # OpenAI
+    openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     chat_history_max_messages: int = Field(default=12, validation_alias="CHAT_HISTORY_MAX_MESSAGES")
     chat_temperature: float = Field(default=0.0, validation_alias="CHAT_TEMPERATURE")
 
     # RAG (local-first, persisted to disk)
     rag_enabled: bool = Field(default=True, validation_alias="RAG_ENABLED")
-    rag_store_dir: str = Field(default=".rag_store", validation_alias="RAG_STORE_DIR")
     rag_top_k: int = Field(default=4, validation_alias="RAG_TOP_K")
     rag_chunk_size: int = Field(default=1200, validation_alias="RAG_CHUNK_SIZE")
     rag_chunk_overlap: int = Field(default=200, validation_alias="RAG_CHUNK_OVERLAP")
@@ -71,7 +73,8 @@ class Settings(BaseSettings):
     # RAG embeddings provider
     # - "gemini": uses GoogleGenerativeAIEmbeddings (requires GOOGLE_API_KEY/GEMINI_API_KEY + quota)
     # - "hf": uses HuggingFaceEmbeddings (local, no quota; heavier dependency)
-    rag_embeddings_provider: Literal["gemini", "hf"] = Field(
+    # - "openai": uses OpenAIEmbeddings (requires OPENAI_API_KEY)
+    rag_embeddings_provider: Literal["gemini", "hf", "openai"] = Field(
         default="gemini", validation_alias="RAG_EMBEDDINGS_PROVIDER"
     )
     rag_local_embedding_model: str = Field(

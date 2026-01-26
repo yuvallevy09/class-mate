@@ -9,6 +9,8 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.db.types.pgvector import Vector
+from app.rag.embedding_config import EMBEDDING_DIMS
 
 
 class ContentChunk(Base):
@@ -40,6 +42,8 @@ class ContentChunk(Base):
     category: Mapped[str] = mapped_column(String(64), nullable=False, index=False)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    # Nullable: older ingestions and lexical-only usage can leave this unset.
+    embedding: Mapped[str | None] = mapped_column(Vector(EMBEDDING_DIMS), nullable=True)
 
     # NOTE: attribute name cannot be `metadata` (reserved by SQLAlchemy Declarative API).
     meta: Mapped[dict] = mapped_column(

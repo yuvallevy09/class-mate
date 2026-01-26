@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Literal
-
 from app.core.settings import Settings
 
 
@@ -10,9 +7,10 @@ def get_embeddings(settings: Settings):
     """
     Embeddings provider:
     - Gemini (remote): requires GOOGLE_API_KEY/GEMINI_API_KEY and quota.
+    - OpenAI (remote): requires OPENAI_API_KEY.
     - HuggingFace (local): no quota, but requires heavier deps + model download.
 
-    Raises ValueError if not configured/available; callers should treat as "indexing disabled".
+    Raises ValueError if not configured/available; callers should treat as "embeddings disabled".
     """
     provider = (getattr(settings, "rag_embeddings_provider", "gemini") or "gemini").strip().lower()
 
@@ -28,6 +26,19 @@ def get_embeddings(settings: Settings):
         )
         return HuggingFaceEmbeddings(model_name=model_name, encode_kwargs={"normalize_embeddings": True})
 
+    if provider == "openai":
+        try:
+            from langchain_openai import OpenAIEmbeddings  # type: ignore
+        except Exception as e:  # pragma: no cover
+            raise ValueError("OpenAIEmbeddings not available") from e
+
+        api_key = (getattr(settings, "openai_api_key", None) or "").strip()
+        if not api_key:
+            raise ValueError("Missing OpenAI API key for embeddings")
+
+        model = (getattr(settings, "rag_embedding_model", None) or "").strip() or "text-embedding-3-small"
+        return OpenAIEmbeddings(model=model, api_key=api_key)
+
     # Default: Gemini embeddings
     try:
         from langchain_google_genai import GoogleGenerativeAIEmbeddings  # type: ignore
@@ -40,22 +51,5 @@ def get_embeddings(settings: Settings):
 
     model = (getattr(settings, "rag_embedding_model", None) or "").strip() or "models/embedding-001"
     return GoogleGenerativeAIEmbeddings(model=model, google_api_key=api_key)
-
-
-def load_chroma(*, persist_dir: Path, settings: Settings, collection_name: str):
-    """
-    Return a LangChain Chroma vector store wired to the configured embeddings provider.
-    """
-    try:
-        from langchain_chroma import Chroma  # type: ignore
-    except Exception as e:  # pragma: no cover
-        raise ValueError("Chroma vectorstore integration not available") from e
-
-    embeddings = get_embeddings(settings)
-    return Chroma(
-        collection_name=collection_name,
-        persist_directory=str(persist_dir),
-        embedding_function=embeddings,
-    )
 
 

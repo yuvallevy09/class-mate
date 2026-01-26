@@ -5,12 +5,14 @@ FROM postgres:17
 # to a tag/commit that you’ve verified works.
 ARG PG_TEXTSEARCH_REF=main
 
+
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
     git \
     build-essential \
     postgresql-server-dev-17 \
+    postgresql-17-pgvector \
   && rm -rf /var/lib/apt/lists/*
 
 RUN git clone --depth 1 --branch "${PG_TEXTSEARCH_REF}" https://github.com/timescale/pg_textsearch.git /tmp/pg_textsearch \

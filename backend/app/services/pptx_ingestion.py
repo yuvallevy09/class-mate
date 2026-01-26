@@ -15,6 +15,8 @@ from app.db.models.content_chunk import ContentChunk
 from app.db.models.course_content import CourseContent
 from app.db.models.document_page import DocumentPage
 from app.db.session import get_session_maker
+from app.rag.embeddings import get_embeddings
+from app.rag.embedding_config import EMBEDDING_DIMS
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,10 @@ def _is_pptx(content: CourseContent) -> bool:
 
 def _sha256_hex(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _vector_literal(vec: list[float]) -> str:
+    return "[" + ",".join(f"{float(x):.9g}" for x in vec) + "]"
 
 
 def _text_splitter(settings: Settings):
@@ -279,6 +285,20 @@ async def ingest_pptx_content_to_db(*, content_id: UUID) -> None:
                 )
             )
             chunk_index += 1
+
+    # Compute embeddings outside the DB transaction to keep writes fast.
+    chunk_embeddings: list[list[float]] | None = None
+    if chunk_rows:
+        try:
+            emb = get_embeddings(settings)
+            chunk_embeddings = emb.embed_documents([c.text for c in chunk_rows])
+        except Exception:
+            chunk_embeddings = None
+
+    if chunk_rows and chunk_embeddings and len(chunk_embeddings) == len(chunk_rows):
+        if all(isinstance(v, list) and len(v) == EMBEDDING_DIMS for v in chunk_embeddings):
+            for row, vec in zip(chunk_rows, chunk_embeddings):
+                row.embedding = _vector_literal(vec)
 
     async with SessionLocal() as db:
         await db.execute(delete(DocumentPage).where(DocumentPage.content_id == content_id))
