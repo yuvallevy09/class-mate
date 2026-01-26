@@ -82,11 +82,11 @@ async def test_chat_returns_citations_when_rag_provides_hits(monkeypatch) -> Non
     user = await _create_user(settings.database_url, email=email, password=password)
     course = await _create_course(settings.database_url, user_id=user.id, name="Course")
 
-    # Mock Postgres retrieval layer so we don't require real chunks or embedding calls in tests.
+    # Mock retrieval layer so we don't require real chunks or embedding calls in tests.
     from app.rag.types import RagHit
     from app.api.v1 import chat as chat_api
 
-    async def _fake_retrieve_course_chunk_hits(**kwargs):  # noqa: ANN001
+    async def _fake_retrieve_course_hybrid_hits(**kwargs):  # noqa: ANN001
         return [
             RagHit(
                 text="This is a retrieved snippet about eigenvalues.",
@@ -100,7 +100,7 @@ async def test_chat_returns_citations_when_rag_provides_hits(monkeypatch) -> Non
             )
         ]
 
-    monkeypatch.setattr(chat_api, "retrieve_course_chunk_hits", _fake_retrieve_course_chunk_hits)
+    monkeypatch.setattr(chat_api, "retrieve_course_hybrid_hits", _fake_retrieve_course_hybrid_hits)
 
     # Mock the LLM call to keep test deterministic.
     async def _mock_generate_reply(self, **kwargs):  # noqa: ANN001
@@ -109,7 +109,7 @@ async def test_chat_returns_citations_when_rag_provides_hits(monkeypatch) -> Non
         citations = []
         try:
             # Build citations using the same helper (keeps test aligned).
-            hits = await _fake_retrieve_course_chunk_hits()
+            hits = await _fake_retrieve_course_hybrid_hits()
             citations = self._hits_to_citations(hits)  # type: ignore[attr-defined]
         except Exception:
             citations = []

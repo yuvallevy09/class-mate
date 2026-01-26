@@ -16,7 +16,7 @@ from app.db.models.chat_message import ChatMessage
 from app.db.models.course import Course
 from app.db.models.user import User
 from app.db.session import get_db
-from app.rag.pg_retrieve import retrieve_course_chunk_hits
+from app.rag.hybrid_retrieve import HybridRetrieveConfig, retrieve_course_hybrid_hits
 from app.schemas.chat import CourseChatRequest, CourseChatResponse
 from app.schemas.chat_persistence import ChatConversationPublic, ChatMessagePublic
 
@@ -82,7 +82,7 @@ async def course_chat(
 
     # Optional DSPy router: decide whether to retrieve course content or answer generally.
     should_retrieve = bool(settings.rag_enabled)
-    if settings.dspy_router_enabled:
+    if settings.dspy_router_enabled and str(getattr(settings, "environment", "")).strip().lower() != "test":
         history_summary = "\n".join([f"{h.role}: {h.content}" for h in history[-6:]]).strip()
         decision = route_message(
             settings=settings,
@@ -94,16 +94,19 @@ async def course_chat(
         # Retrieve for course-specific and mixed queries.
         should_retrieve = bool(settings.rag_enabled) and bool(decision.needs_course_retrieval)
 
-    # Retrieval: Postgres single source of truth (BM25).
-    # (Hybrid retrieval + RRF will be added next.)
     rag_hits = []
     if should_retrieve:
         try:
-            rag_hits = await retrieve_course_chunk_hits(
+            rag_hits = await retrieve_course_hybrid_hits(
                 db=db,
                 course_id=course.id,
                 query=body.message,
-                top_k=int(settings.rag_top_k),
+                cfg=HybridRetrieveConfig(
+                    lexical_k=max(10, int(settings.rag_top_k) * 3),
+                    semantic_k=max(10, int(settings.rag_top_k) * 3),
+                    top_k=int(settings.rag_top_k),
+                    rrf_k0=60,
+                ),
                 categories=None,
             )
         except Exception:
