@@ -18,6 +18,7 @@ from app.core.settings import Settings, get_settings
 from app.db.models.transcript_segment import TranscriptSegment
 from app.db.models.video_asset import VideoAsset
 from app.db.session import get_session_maker
+from app.services.transcript_chunk_ingestion import ingest_video_asset_transcript_to_chunks
 
 
 @dataclass(frozen=True)
@@ -373,6 +374,18 @@ async def transcribe_video_asset(*, video_asset_id: UUID, requested_language: st
                             language_code=language_code,
                         )
                     )
+
+                # Also write transcript chunks into the unified retrieval corpus (`content_chunks`)
+                # so they participate in BM25 + pgvector retrieval.
+                try:
+                    await ingest_video_asset_transcript_to_chunks(
+                        db=db,
+                        video_asset_id=asset.id,
+                        language_code=language_code,
+                    )
+                except Exception:
+                    # Best-effort: transcript segments remain the source of truth.
+                    pass
                 asset.status = "done"
                 asset.transcript_ingested_at = datetime.now(timezone.utc)
                 asset.transcription_completed_at = datetime.now(timezone.utc)
