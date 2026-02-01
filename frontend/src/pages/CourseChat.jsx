@@ -10,6 +10,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/use-toast";
 import Navbar from "@/components/Navbar";
 import CourseSidebar from "@/components/CourseSidebar";
@@ -30,6 +31,7 @@ export default function CourseChat() {
   const [optimisticMessages, setOptimisticMessages] = useState([]);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
   const [sendError, setSendError] = useState(null);
+  const [videoPlayer, setVideoPlayer] = useState({ open: false, url: null, title: null });
   const scrollContainerRef = useRef(null);
   const textareaRef = useRef(null);
   
@@ -280,8 +282,9 @@ export default function CourseChat() {
                                   <ol className="my-2 ml-5 list-decimal space-y-1">{children}</ol>
                                 ),
                                 li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-                                a: ({ children, href }) => {
+                                a: ({ children, href, title }) => {
                                   const h = String(href || "");
+                                  const t = String(title || "");
                                   // Hide footnote back-reference links (↩, ↩2, ...)
                                   // so the Sources list stays clean.
                                   if (h.includes("fnref") || h.includes("footnote-backref")) {
@@ -312,6 +315,30 @@ export default function CourseChat() {
                                       <a
                                         href={h}
                                         className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
+                                      >
+                                        {children}
+                                      </a>
+                                    );
+                                  }
+
+                                  const isVideoHint = t.toLowerCase().startsWith("video:");
+                                  const videoTitle = isVideoHint ? t.slice("video:".length).trim() : null;
+                                  const looksLikeVideo = /\.(mp4|mov|webm|m4v)(\?|$)/i.test(h);
+                                  const shouldOpenVideoModal = isVideoHint || looksLikeVideo;
+
+                                  if (shouldOpenVideoModal) {
+                                    return (
+                                      <a
+                                        href={h}
+                                        className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          setVideoPlayer({
+                                            open: true,
+                                            url: h,
+                                            title: videoTitle || "Video",
+                                          });
+                                        }}
                                       >
                                         {children}
                                       </a>
@@ -438,6 +465,30 @@ export default function CourseChat() {
           activeConversationId={activeConversationId}
         />
       </div>
+
+      <Dialog
+        open={!!videoPlayer.open}
+        onOpenChange={(open) => setVideoPlayer((prev) => ({ ...prev, open }))}
+      >
+        <DialogContent className="bg-[#131313] border-white/10 text-white max-w-5xl">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-bold">
+              {videoPlayer.title || "Video"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="mt-3">
+            <div className="rounded-2xl overflow-hidden bg-black/60 border border-white/10">
+              <video
+                key={videoPlayer.url || "video"}
+                src={videoPlayer.url || undefined}
+                controls
+                playsInline
+                className="w-full max-h-[70vh] bg-black"
+              />
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
