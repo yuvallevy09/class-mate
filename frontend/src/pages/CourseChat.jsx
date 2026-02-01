@@ -152,7 +152,7 @@ export default function CourseChat() {
       if (status === 501) {
         msg =
           (typeof detail === "string" && detail) ||
-          "Chat is not configured on the server yet. Set GOOGLE_API_KEY or GEMINI_API_KEY in backend/.env.";
+          "Chat is not configured on the server yet. Set GOOGLE_API_KEY in backend/.env.";
       } else if (status === 502) {
         msg = "The LLM request failed (502). Please retry.";
       } else if (status === 403) {

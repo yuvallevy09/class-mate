@@ -52,10 +52,8 @@ class Settings(BaseSettings):
     runpod_use_runsync: bool = Field(default=True, validation_alias="RUNPOD_USE_RUNSYNC")
     runpod_whisper_model: str = Field(default="base", validation_alias="RUNPOD_WHISPER_MODEL")
 
-    # LLM (Gemini)
-    # We read both, but the caller should choose deterministically and pass api_key explicitly.
+    # LLM (Gemini via Google API key)
     google_api_key: str | None = Field(default=None, validation_alias="GOOGLE_API_KEY")
-    gemini_api_key: str | None = Field(default=None, validation_alias="GEMINI_API_KEY")
     gemini_model: str = Field(default="gemini-2.5-flash", validation_alias="GEMINI_MODEL")
 
     # OpenAI
@@ -71,7 +69,7 @@ class Settings(BaseSettings):
     rag_embedding_model: str = Field(default="models/embedding-001", validation_alias="RAG_EMBEDDING_MODEL")
 
     # RAG embeddings provider
-    # - "gemini": uses GoogleGenerativeAIEmbeddings (requires GOOGLE_API_KEY/GEMINI_API_KEY + quota)
+    # - "gemini": uses GoogleGenerativeAIEmbeddings (requires GOOGLE_API_KEY + quota)
     # - "hf": uses HuggingFaceEmbeddings (local, no quota; heavier dependency)
     # - "openai": uses OpenAIEmbeddings (requires OPENAI_API_KEY)
     rag_embeddings_provider: Literal["gemini", "hf", "openai"] = Field(

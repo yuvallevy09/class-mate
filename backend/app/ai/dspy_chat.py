@@ -18,12 +18,9 @@ def _litellm_gemini_model(model: str) -> str:
 
 
 def _effective_gemini_api_key(settings: Settings) -> str:
-    # Prefer a single configured key. If both are set, GOOGLE_API_KEY wins.
-    key = (settings.google_api_key or "").strip() or (settings.gemini_api_key or "").strip()
+    key = (settings.google_api_key or "").strip()
     if not key:
-        raise ValueError(
-            "Missing Gemini API key. Set GOOGLE_API_KEY (preferred) or GEMINI_API_KEY in backend/.env."
-        )
+        raise ValueError("Missing Gemini API key. Set GOOGLE_API_KEY in backend/.env.")
     return key
 
 

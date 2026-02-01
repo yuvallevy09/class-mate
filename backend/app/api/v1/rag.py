@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -74,7 +73,7 @@ def _embeddings_configured(settings: Settings) -> bool:
         return True
 
     # Default: Gemini
-    api_key = (settings.google_api_key or "").strip() or (settings.gemini_api_key or "").strip()
+    api_key = (settings.google_api_key or "").strip()
     if not api_key:
         return False
     try:

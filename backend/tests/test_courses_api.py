@@ -81,7 +81,7 @@ async def test_courses_auth_and_ownership() -> None:
     password = "pw"
     email_a = f"test-a-{uuid4()}@example.com"
     email_b = f"test-b-{uuid4()}@example.com"
-    user_a = await _create_user(settings.database_url, email=email_a, password=password)
+    await _create_user(settings.database_url, email=email_a, password=password)
     user_b = await _create_user(settings.database_url, email=email_b, password=password)
 
     transport = httpx.ASGITransport(app=app)

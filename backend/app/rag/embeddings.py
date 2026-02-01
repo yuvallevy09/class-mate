@@ -6,7 +6,7 @@ from app.core.settings import Settings
 def get_embeddings(settings: Settings):
     """
     Embeddings provider:
-    - Gemini (remote): requires GOOGLE_API_KEY/GEMINI_API_KEY and quota.
+    - Gemini (remote): requires GOOGLE_API_KEY and quota.
     - OpenAI (remote): requires OPENAI_API_KEY.
     - HuggingFace (local): no quota, but requires heavier deps + model download.
 
@@ -45,9 +45,9 @@ def get_embeddings(settings: Settings):
     except Exception as e:  # pragma: no cover
         raise ValueError("GoogleGenerativeAIEmbeddings not available") from e
 
-    api_key = (settings.google_api_key or "").strip() or (settings.gemini_api_key or "").strip()
+    api_key = (settings.google_api_key or "").strip()
     if not api_key:
-        raise ValueError("Missing Gemini API key for embeddings")
+        raise ValueError("Missing GOOGLE_API_KEY for embeddings")
 
     model = (getattr(settings, "rag_embedding_model", None) or "").strip() or "models/embedding-001"
     return GoogleGenerativeAIEmbeddings(model=model, google_api_key=api_key)

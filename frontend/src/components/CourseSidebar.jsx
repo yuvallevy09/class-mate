@@ -146,27 +146,45 @@ export default function CourseSidebar({
                     Course Content
                   </h3>
                   <div className="space-y-2">
-                    {COURSE_SIDEBAR_ITEMS.map((item) => (
-                      <Link
-                        key={item.id}
-                        to={createPageUrl(
-                          `CourseContent?courseId=${courseId}&category=${item.id}`
-                        )}
-                        onClick={() => onClose?.()}
-                      >
-                        <motion.button
-                          whileHover={{ x: 4 }}
-                          className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-colors ${
-                            activeCategory === item.id
-                              ? "bg-purple-500/20 text-white border border-purple-500/30"
-                              : "text-gray-300 hover:text-white hover:bg-white/5"
-                          }`}
+                    {COURSE_SIDEBAR_ITEMS.map((item) => {
+                      const isVideos = item.id === "media";
+
+                      if (!isVideos) {
+                        return (
+                          <div
+                            key={item.id}
+                            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-gray-500 bg-white/0 border border-white/0 cursor-not-allowed"
+                            aria-disabled="true"
+                          >
+                            <item.icon className="w-5 h-5 text-gray-600" />
+                            <span className="text-sm font-medium">{item.label}</span>
+                            <span className="ml-auto text-xs text-gray-600">Coming Soon</span>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <Link
+                          key={item.id}
+                          to={createPageUrl(
+                            `CourseContent?courseId=${courseId}&category=${item.id}`
+                          )}
+                          onClick={() => onClose?.()}
                         >
-                          <item.icon className="w-5 h-5 text-purple-400" />
-                          <span className="text-sm font-medium">{item.label}</span>
-                        </motion.button>
-                      </Link>
-                    ))}
+                          <motion.button
+                            whileHover={{ x: 4 }}
+                            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-colors ${
+                              activeCategory === item.id
+                                ? "bg-purple-500/20 text-white border border-purple-500/30"
+                                : "text-gray-300 hover:text-white hover:bg-white/5"
+                            }`}
+                          >
+                            <item.icon className="w-5 h-5 text-purple-400" />
+                            <span className="text-sm font-medium">{item.label}</span>
+                          </motion.button>
+                        </Link>
+                      );
+                    })}
                   </div>
                 </div>
 

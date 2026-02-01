@@ -27,7 +27,7 @@ Users can create courses, upload and manage lecture slides/PDFs/other resources,
     - `GET /api/v1/courses/{courseId}/conversations`
     - `GET /api/v1/conversations/{conversationId}/messages`
     - `DELETE /api/v1/conversations/{conversationId}`
-  - Backend generates responses via **Gemini (LangChain)** when `GOOGLE_API_KEY` or `GEMINI_API_KEY` is configured.
+- Backend generates responses via **Gemini (LangChain)** when `GOOGLE_API_KEY` is configured.
 - **RAG (PDF → per-course vector index → citations)**:
   - File-backed **PDF** course contents are indexed into a persisted per-course **Chroma** store on disk.
   - Indexing is triggered automatically when you create a content item with an attached file (`POST /courses/{courseId}/contents`), and can also be triggered manually.
@@ -130,7 +130,7 @@ Configure env:
 
 Configure backend chat keys (optional, only needed for chat replies):
 
-- Set `GOOGLE_API_KEY` (preferred) or `GEMINI_API_KEY` in `backend/.env`
+- Set `GOOGLE_API_KEY` in `backend/.env`
 
 Start the frontend (Vite default port **5173**):
 
@@ -178,7 +178,7 @@ RAG is **per-course** and stores a persisted Chroma index under:
 
 - **S3 configured** (at minimum `S3_BUCKET`), because indexing fetches the uploaded PDFs from object storage.
 - **Embeddings configured**:
-  - **Gemini embeddings (default)**: set `GOOGLE_API_KEY` or `GEMINI_API_KEY` and ensure quota/billing allows embeddings.
+  - **Gemini embeddings (default)**: set `GOOGLE_API_KEY` and ensure quota/billing allows embeddings.
   - **Local embeddings**: set `RAG_EMBEDDINGS_PROVIDER=hf` (uses `sentence-transformers`, downloads the model on first run).
 
 ### Debug endpoints

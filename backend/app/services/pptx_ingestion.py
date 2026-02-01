@@ -104,7 +104,7 @@ def _extract_pptx_slides(pptx_bytes: bytes) -> list[ExtractedSlide]:
                     for cell in row.cells:
                         cells.append((cell.text or "").strip())
                     lines.append(" | ".join([c for c in cells if c]))
-                ttxt = "\n".join([l for l in lines if l.strip()])
+                ttxt = "\n".join([line for line in lines if line.strip()])
                 if ttxt:
                     txt = _join_nonempty(txt, ttxt, sep="\n")
         except Exception:
