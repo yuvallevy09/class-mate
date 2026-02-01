@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from uuid import UUID
 
+import boto3
+from botocore.config import Config
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,14 +18,129 @@ from app.core.settings import Settings, get_settings
 from app.db.models.chat_conversation import ChatConversation
 from app.db.models.chat_message import ChatMessage
 from app.db.models.course import Course
+from app.db.models.course_content import CourseContent
 from app.db.models.user import User
 from app.db.session import get_db, get_session_maker
 from app.rag.hybrid_retrieve import HybridRetrieveConfig, retrieve_course_hybrid_hits
-from app.schemas.chat import CourseChatRequest, CourseChatResponse
+from app.schemas.chat import ChatCitation, CourseChatRequest, CourseChatResponse
 from app.schemas.chat_persistence import ChatConversationPublic, ChatMessagePublic
 
 router = APIRouter(tags=["chat"])
 logger = logging.getLogger(__name__)
+
+
+def _s3_client(settings: Settings):
+    kwargs: dict = {"service_name": "s3", "region_name": settings.s3_region}
+    if settings.s3_endpoint_url:
+        kwargs["endpoint_url"] = settings.s3_endpoint_url
+        kwargs["config"] = Config(s3={"addressing_style": "path"})
+    if settings.s3_access_key_id and settings.s3_secret_access_key:
+        kwargs["aws_access_key_id"] = settings.s3_access_key_id
+        kwargs["aws_secret_access_key"] = settings.s3_secret_access_key
+    return boto3.client(**kwargs)
+
+
+async def _attach_citation_urls(
+    *,
+    db: AsyncSession,
+    settings: Settings,
+    course_id: UUID,
+    citations: list[ChatCitation],
+) -> list[ChatCitation]:
+    """Best-effort: attach presigned download URLs for citations (when possible)."""
+    if not citations or not settings.s3_bucket:
+        return citations
+
+    content_ids: list[UUID] = []
+    for c in citations:
+        if c.content_id and not c.url:
+            content_ids.append(c.content_id)
+    if not content_ids:
+        return citations
+
+    res = await db.execute(
+        select(CourseContent.id, CourseContent.file_key).where(
+            CourseContent.course_id == course_id,
+            CourseContent.id.in_(content_ids),
+            CourseContent.file_key.is_not(None),
+        )
+    )
+    file_key_by_id: dict[UUID, str] = {cid: str(key) for (cid, key) in res.all() if key}
+    if not file_key_by_id:
+        return citations
+
+    s3 = _s3_client(settings)
+    for c in citations:
+        if c.content_id and not c.url:
+            fk = file_key_by_id.get(c.content_id)
+            if not fk:
+                continue
+            try:
+                c.url = s3.generate_presigned_url(
+                    ClientMethod="get_object",
+                    Params={"Bucket": settings.s3_bucket, "Key": fk},
+                    ExpiresIn=int(settings.s3_download_expires_seconds),
+                )
+            except Exception:
+                pass
+    return citations
+
+
+_CITATION_RE = re.compile(r"\[(?:#\s*)?(\d{1,3})\]")
+
+
+def _format_reply_with_sources(reply: str, citations: list[ChatCitation]) -> str:
+    """
+    Convert inline citation markers like [1] or [#1] into markdown footnote references [^1],
+    and append footnote definitions containing a one-line source description + link.
+    """
+    text = (reply or "").strip()
+    if not citations:
+        return text
+
+    n = len(citations)
+
+    def repl(m: re.Match) -> str:
+        try:
+            i = int(m.group(1))
+        except Exception:
+            return m.group(0)
+        return f"[^{i}]" if 1 <= i <= n else m.group(0)
+
+    text = _CITATION_RE.sub(repl, text)
+
+    # NOTE: We do NOT add a "Sources" header here because remark-gfm renders footnotes
+    # into a dedicated section with its own heading. We customize that heading in the UI.
+    lines: list[str] = [""]
+    for i, c in enumerate(citations, start=1):
+        extra = c.extra or {}
+        original = str(extra.get("original_filename") or "").strip()
+        title = (c.title or "").strip()
+        label = (title or original or (str(c.content_id) if c.content_id else "Course content")).strip()
+
+        if extra.get("type") == "video":
+            try:
+                s = float(extra.get("startSec") or 0.0)
+                e = float(extra.get("endSec") or 0.0)
+                label = f"{label} (video {s:.0f}s–{e:.0f}s)"
+            except Exception:
+                label = f"{label} (video)"
+        elif extra.get("pageStart") or extra.get("pageEnd"):
+            try:
+                ps = int(extra.get("pageStart") or extra.get("pageEnd") or 0)
+                pe = int(extra.get("pageEnd") or extra.get("pageStart") or ps)
+                if ps and pe:
+                    label = f"{label} (p.{ps}" + (f"–{pe}" if pe != ps else "") + ")"
+            except Exception:
+                pass
+
+        if c.url:
+            # Single link only (UI hides the autogenerated backrefs).
+            lines.append(f"[^{i}]: {label} — [Open source]({c.url})")
+        else:
+            lines.append(f"[^{i}]: {label}")
+
+    return (text + "\n" + "\n".join(lines)).strip() + "\n"
 
 
 async def _ensure_owned_course(db: AsyncSession, *, course_id: UUID, user_id: int) -> Course:
@@ -150,14 +268,19 @@ async def course_chat(
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="LLM request failed") from e
 
-    db.add(ChatMessage(conversation_id=conversation.id, role="assistant", content=reply))
+    # Best-effort: attach presigned URLs to citations, then append a Sources section to the reply
+    # so citations are readable and persistent in chat history.
+    citations = await _attach_citation_urls(db=db, settings=settings, course_id=course.id, citations=citations)
+    reply_with_sources = _format_reply_with_sources(reply, citations)
+
+    db.add(ChatMessage(conversation_id=conversation.id, role="assistant", content=reply_with_sources))
 
     # Bump conversation activity.
     conversation.last_message_at = datetime.now(timezone.utc)
 
     await db.commit()
 
-    return CourseChatResponse(text=reply, citations=citations, conversation_id=conversation.id)
+    return CourseChatResponse(text=reply_with_sources, citations=citations, conversation_id=conversation.id)
 
 
 @router.get("/courses/{course_id}/conversations", response_model=list[ChatConversationPublic])

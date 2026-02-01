@@ -280,16 +280,56 @@ export default function CourseChat() {
                                   <ol className="my-2 ml-5 list-decimal space-y-1">{children}</ol>
                                 ),
                                 li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-                                a: ({ children, href }) => (
-                                  <a
-                                    href={href}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
-                                  >
-                                    {children}
-                                  </a>
-                                ),
+                                a: ({ children, href }) => {
+                                  const h = String(href || "");
+                                  // Hide footnote back-reference links (↩, ↩2, ...)
+                                  // so the Sources list stays clean.
+                                  if (h.includes("fnref") || h.includes("footnote-backref")) {
+                                    return null;
+                                  }
+
+                                  const isHashLink = h.startsWith("#");
+                                  const isFootnoteRef = h.includes("fn-") || h.includes("footnote");
+
+                                  // Footnote refs should jump within the page (no new tab)
+                                  // and look like footnote markers.
+                                  if (isHashLink && isFootnoteRef) {
+                                    return (
+                                      <sup className="ml-0.5">
+                                        <a
+                                          href={h}
+                                          className="text-purple-300 hover:text-purple-200 no-underline"
+                                        >
+                                          {children}
+                                        </a>
+                                      </sup>
+                                    );
+                                  }
+
+                                  // Regular in-page links should not open a new tab.
+                                  if (isHashLink) {
+                                    return (
+                                      <a
+                                        href={h}
+                                        className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
+                                      >
+                                        {children}
+                                      </a>
+                                    );
+                                  }
+
+                                  // External links: keep existing behavior.
+                                  return (
+                                    <a
+                                      href={h}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
+                                    >
+                                      {children}
+                                    </a>
+                                  );
+                                },
                                 blockquote: ({ children }) => (
                                   <blockquote className="my-3 border-l-2 border-white/15 pl-4 text-gray-200/90">
                                     {children}
@@ -315,9 +355,13 @@ export default function CourseChat() {
                                 h1: ({ children }) => (
                                   <h1 className="mt-4 mb-2 text-lg font-semibold">{children}</h1>
                                 ),
-                                h2: ({ children }) => (
-                                  <h2 className="mt-4 mb-2 text-base font-semibold">{children}</h2>
-                                ),
+                                h2: ({ children, id }) => {
+                                  // remark-gfm footnotes section header uses id="footnote-label"
+                                  if (String(id || "") === "footnote-label") {
+                                    return <div className="mt-4 mb-2 font-semibold">Sources</div>;
+                                  }
+                                  return <h2 className="mt-4 mb-2 text-base font-semibold">{children}</h2>;
+                                },
                                 h3: ({ children }) => (
                                   <h3 className="mt-3 mb-2 text-sm font-semibold">{children}</h3>
                                 ),

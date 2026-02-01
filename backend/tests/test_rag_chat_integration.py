@@ -136,7 +136,9 @@ async def test_chat_returns_citations_when_rag_provides_hits(monkeypatch) -> Non
         )
         assert r.status_code == 200
         body = r.json()
-        assert body["text"] == "mocked assistant reply"
+        # Reply should include footnote definitions when citations are present.
+        assert "mocked assistant reply" in body["text"]
+        assert "[^1]:" in body["text"]
         assert isinstance(body.get("citations"), list)
         assert len(body["citations"]) == 1
         assert body["citations"][0]["snippet"]
