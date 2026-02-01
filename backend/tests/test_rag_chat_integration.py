@@ -83,7 +83,7 @@ async def test_chat_returns_citations_when_rag_provides_hits(monkeypatch) -> Non
     course = await _create_course(settings.database_url, user_id=user.id, name="Course")
 
     # Mock retrieval layer so we don't require real chunks or embedding calls in tests.
-    from app.rag.types import RagHit
+        from app.rag.types import RagHit
     from app.api.v1 import chat as chat_api
 
     async def _fake_retrieve_course_hybrid_hits(**kwargs):  # noqa: ANN001
