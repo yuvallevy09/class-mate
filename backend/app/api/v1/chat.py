@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -15,12 +16,13 @@ from app.db.models.chat_conversation import ChatConversation
 from app.db.models.chat_message import ChatMessage
 from app.db.models.course import Course
 from app.db.models.user import User
-from app.db.session import get_db
+from app.db.session import get_db, get_session_maker
 from app.rag.hybrid_retrieve import HybridRetrieveConfig, retrieve_course_hybrid_hits
 from app.schemas.chat import CourseChatRequest, CourseChatResponse
 from app.schemas.chat_persistence import ChatConversationPublic, ChatMessagePublic
 
 router = APIRouter(tags=["chat"])
+logger = logging.getLogger(__name__)
 
 
 async def _ensure_owned_course(db: AsyncSession, *, course_id: UUID, user_id: int) -> Course:
@@ -97,19 +99,25 @@ async def course_chat(
     rag_hits = []
     if should_retrieve:
         try:
-            rag_hits = await retrieve_course_hybrid_hits(
-                db=db,
-                course_id=course.id,
-                query=body.message,
-                cfg=HybridRetrieveConfig(
-                    lexical_k=max(10, int(settings.rag_top_k) * 3),
-                    semantic_k=max(10, int(settings.rag_top_k) * 3),
-                    top_k=int(settings.rag_top_k),
-                    rrf_k0=60,
-                ),
-                categories=None,
-            )
-        except Exception:
+            # IMPORTANT: Postgres errors can abort the current transaction. Retrieval is best-effort
+            # (we can fall back to non-RAG chat), so run retrieval in an isolated read-only session
+            # to avoid poisoning the write transaction used for message persistence.
+            SessionLocal = get_session_maker()
+            async with SessionLocal() as rag_db:
+                rag_hits = await retrieve_course_hybrid_hits(
+                    db=rag_db,
+                    course_id=course.id,
+                    query=body.message,
+                    cfg=HybridRetrieveConfig(
+                        lexical_k=max(10, int(settings.rag_top_k) * 3),
+                        semantic_k=max(10, int(settings.rag_top_k) * 3),
+                        top_k=int(settings.rag_top_k),
+                        rrf_k0=60,
+                    ),
+                    categories=None,
+                )
+        except Exception as e:
+            logger.warning("RAG retrieval failed (best-effort): %s", str(e))
             rag_hits = []
 
     # LLM reply (with optional RAG context).

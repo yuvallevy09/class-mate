@@ -4,6 +4,7 @@ import re
 from uuid import UUID, uuid4
 
 import boto3
+from botocore.config import Config
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -50,6 +51,8 @@ def _s3_client(settings: Settings):
     kwargs: dict = {"service_name": "s3", "region_name": settings.s3_region}
     if settings.s3_endpoint_url:
         kwargs["endpoint_url"] = settings.s3_endpoint_url
+        # MinIO/local S3 often doesn't support virtual-host bucket addressing on localhost.
+        kwargs["config"] = Config(s3={"addressing_style": "path"})
     if settings.s3_access_key_id and settings.s3_secret_access_key:
         kwargs["aws_access_key_id"] = settings.s3_access_key_id
         kwargs["aws_secret_access_key"] = settings.s3_secret_access_key
@@ -68,6 +71,21 @@ async def presign_upload(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="S3 is not configured (missing S3_BUCKET)",
         )
+    # Fail fast on the common misconfig: placeholder credentials + no endpoint_url.
+    # Otherwise the browser gets a confusing 403 from AWS S3.
+    if not settings.s3_endpoint_url:
+        ak = (settings.s3_access_key_id or "").strip()
+        sk = (settings.s3_secret_access_key or "").strip()
+        if ak in {"access-id", "minioadmin", ""} or sk in {"access-key", "minioadmin", ""}:
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail=(
+                    "S3 uploads are not configured for this environment. "
+                    "For local dev with Docker MinIO, set: "
+                    "S3_ENDPOINT_URL=http://localhost:9000, S3_BUCKET=classmate, "
+                    "S3_ACCESS_KEY_ID=minioadmin, S3_SECRET_ACCESS_KEY=minioadmin."
+                ),
+            )
 
     # Ownership check: ensure user owns this course.
     res = await db.execute(

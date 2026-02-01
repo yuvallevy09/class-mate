@@ -12,6 +12,7 @@ from uuid import UUID
 
 import boto3
 import httpx
+from botocore.config import Config
 from sqlalchemy import delete, select
 
 from app.core.settings import Settings, get_settings
@@ -32,6 +33,7 @@ def _s3_client(settings: Settings):
     kwargs: dict[str, Any] = {"service_name": "s3", "region_name": settings.s3_region}
     if settings.s3_endpoint_url:
         kwargs["endpoint_url"] = settings.s3_endpoint_url
+        kwargs["config"] = Config(s3={"addressing_style": "path"})
     if settings.s3_access_key_id and settings.s3_secret_access_key:
         kwargs["aws_access_key_id"] = settings.s3_access_key_id
         kwargs["aws_secret_access_key"] = settings.s3_secret_access_key

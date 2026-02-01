@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import List, Literal
 
 from pydantic import Field, field_validator, model_validator
@@ -8,7 +9,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_ignore_empty=True, extra="ignore")
+    # IMPORTANT: load env relative to the backend folder, not the current working directory.
+    # This avoids common CORS/auth misconfig when starting uvicorn from the repo root.
+    _BACKEND_ROOT = Path(__file__).resolve().parents[2]  # backend/
+    model_config = SettingsConfigDict(
+        env_file=str(_BACKEND_ROOT / ".env"),
+        env_ignore_empty=True,
+        extra="ignore",
+    )
 
     # Environment
     environment: Literal["development", "test", "production"] = Field(
