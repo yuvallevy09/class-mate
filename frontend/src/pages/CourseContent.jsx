@@ -373,6 +373,11 @@ export default function CourseContent() {
                     stage === "extracting_audio" ? "Extracting audio" :
                     stage === "transcribing" ? "Transcribing" :
                     null;
+                  const doneLabel =
+                    stage === "done_no_embeddings" ? "Indexed (lexical only)" :
+                    stage === "done_no_index" ? "Transcribed (not indexed)" :
+                    stage === "uploaded" ? "Uploaded" :
+                    null;
                   const stageProgress =
                     stage === "processing" ? 15 :
                     stage === "extracting_audio" ? 45 :
@@ -433,6 +438,14 @@ export default function CourseContent() {
                                   className="h-full bg-purple-500/70"
                                   style={{ width: `${stageProgress}%` }}
                                 />
+                              </div>
+                            </div>
+                          )}
+
+                          {isVideo && !isProcessing && !isError && doneLabel && (
+                            <div className="mt-4">
+                              <div className="inline-flex items-center gap-2 text-xs font-semibold text-gray-300 bg-white/5 border border-white/10 rounded-full px-3 py-1">
+                                {doneLabel}
                               </div>
                             </div>
                           )}

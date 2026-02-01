@@ -375,20 +375,42 @@ async def transcribe_video_asset(*, video_asset_id: UUID, requested_language: st
                         )
                     )
 
+                # Ensure newly inserted transcript segments are visible to the chunk-ingestion
+                # query below (same transaction, but explicit flush keeps behavior predictable).
+                await db.flush()
+
                 # Also write transcript chunks into the unified retrieval corpus (`content_chunks`)
                 # so they participate in BM25 + pgvector retrieval.
+                #
+                # Important: transcript_segments are the source of truth, but for chat retrieval we
+                # want to reflect whether indexing (and embeddings) actually succeeded.
+                transcript_ingested = False
+                embeddings_written = False
                 try:
-                    await ingest_video_asset_transcript_to_chunks(
+                    ingest_res = await ingest_video_asset_transcript_to_chunks(
                         db=db,
                         video_asset_id=asset.id,
                         language_code=language_code,
                     )
-                except Exception:
-                    # Best-effort: transcript segments remain the source of truth.
-                    pass
-                asset.status = "done"
-                asset.transcript_ingested_at = datetime.now(timezone.utc)
-                asset.transcription_completed_at = datetime.now(timezone.utc)
+                    transcript_ingested = bool(getattr(ingest_res, "chunks_written", 0) > 0)
+                    embeddings_written = bool(getattr(ingest_res, "embeddings_written", False))
+                except Exception as e:
+                    # Indexing failed: keep the transcript segments, but mark the status so the UI
+                    # doesn't pretend everything is fully searchable.
+                    asset.transcription_error = f"Transcript indexing failed: {e}"
+                    transcript_ingested = False
+                    embeddings_written = False
+
+                if transcript_ingested and embeddings_written:
+                    asset.status = "done"
+                elif transcript_ingested and not embeddings_written:
+                    asset.status = "done_no_embeddings"
+                else:
+                    asset.status = "done_no_index"
+
+                now = datetime.now(timezone.utc)
+                asset.transcript_ingested_at = now if transcript_ingested else None
+                asset.transcription_completed_at = now
                 await db.commit()
         except subprocess.CalledProcessError:
             asset.status = "error"

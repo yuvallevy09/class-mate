@@ -434,11 +434,11 @@ async def start_transcription_stub(
 
     if asset.status in {"processing", "extracting_audio", "transcribing"}:
         return {"ok": True, "video_asset_id": str(asset.id), "status": asset.status}
-    if asset.status == "done" and not force:
+    if asset.status in {"done", "done_no_embeddings", "done_no_index"} and not force:
         return {"ok": True, "video_asset_id": str(asset.id), "status": asset.status}
 
     # Retry after error: clear completion markers so status reflects current run.
-    if asset.status in {"error", "done"} and force:
+    if asset.status in {"error", "done", "done_no_embeddings", "done_no_index"} and force:
         asset.transcription_job_id = None
         asset.transcription_completed_at = None
         asset.transcript_ingested_at = None

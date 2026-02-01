@@ -205,7 +205,9 @@ async def test_transcription_pipeline_persists_segments(monkeypatch) -> None:
     try:
         async with SessionLocal() as session:
             a = (await session.execute(select(VideoAsset).where(VideoAsset.id == asset.id))).scalar_one()
-            assert a.status == "done"
+            # Embeddings are best-effort; in most local/test configs we still index transcript chunks
+            # but leave embeddings NULL, so status reflects that.
+            assert a.status in {"done", "done_no_embeddings"}
             assert a.transcription_job_id == "job-1"
             assert a.audio_file_key is not None
             assert a.transcript_ingested_at is not None

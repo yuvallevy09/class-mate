@@ -23,6 +23,12 @@ class TranscriptPiece:
     text: str
 
 
+@dataclass(frozen=True)
+class TranscriptChunkIngestResult:
+    chunks_written: int
+    embeddings_written: bool
+
+
 def _vector_literal(vec: list[float]) -> str:
     return "[" + ",".join(f"{float(x):.9g}" for x in vec) + "]"
 
@@ -98,20 +104,20 @@ async def ingest_video_asset_transcript_to_chunks(
     db: AsyncSession,
     video_asset_id: UUID,
     language_code: str,
-) -> int:
+) -> TranscriptChunkIngestResult:
     """
     Replace-all: write transcript chunks for a video into `content_chunks` so they participate
     in BM25 + pgvector retrieval.
     """
     settings: Settings = get_settings()
     if not getattr(settings, "rag_enabled", True):
-        return 0
+        return TranscriptChunkIngestResult(chunks_written=0, embeddings_written=False)
 
     # Load asset + related content row (for category/title).
     ares = await db.execute(select(VideoAsset).where(VideoAsset.id == video_asset_id))
     asset = ares.scalar_one_or_none()
     if asset is None:
-        return 0
+        return TranscriptChunkIngestResult(chunks_written=0, embeddings_written=False)
 
     cres = await db.execute(select(CourseContent).where(CourseContent.id == asset.content_id))
     content = cres.scalar_one_or_none()
@@ -133,7 +139,7 @@ async def ingest_video_asset_transcript_to_chunks(
         if (s.text or "").strip()
     ]
     if not pieces:
-        return 0
+        return TranscriptChunkIngestResult(chunks_written=0, embeddings_written=False)
 
     chunks = _chunk_transcript(
         pieces=pieces,
@@ -175,11 +181,16 @@ async def ingest_video_asset_transcript_to_chunks(
         )
         rows.append(row)
 
-    if embeddings and len(embeddings) == len(rows) and all(isinstance(v, list) and len(v) == EMBEDDING_DIMS for v in embeddings):
+    embeddings_ok = bool(
+        embeddings
+        and len(embeddings) == len(rows)
+        and all(isinstance(v, list) and len(v) == EMBEDDING_DIMS for v in embeddings)
+    )
+    if embeddings_ok:
         for row, vec in zip(rows, embeddings):
             row.embedding = _vector_literal(vec)
 
     db.add_all(rows)
-    return len(rows)
+    return TranscriptChunkIngestResult(chunks_written=len(rows), embeddings_written=embeddings_ok)
 
 

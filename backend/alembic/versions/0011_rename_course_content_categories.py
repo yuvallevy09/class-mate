@@ -18,7 +18,7 @@ import sqlalchemy as sa
 # revision identifiers, used by Alembic.
 # IMPORTANT: alembic_version.version_num is VARCHAR(32) by default, so keep this <= 32 chars.
 revision = "0011_rename_categories"
-down_revision = "0010_video_content_fk"
+down_revision = "0007_video_assets_local_v1"
 branch_labels = None
 depends_on = None
 
