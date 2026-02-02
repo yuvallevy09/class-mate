@@ -20,6 +20,7 @@ from app.db.models.transcript_segment import TranscriptSegment
 from app.db.models.video_asset import VideoAsset
 from app.db.session import get_session_maker
 from app.services.transcript_chunk_ingestion import ingest_video_asset_transcript_to_chunks
+from app.services.video_summary import generate_and_store_video_asset_summary
 
 
 @dataclass(frozen=True)
@@ -414,6 +415,23 @@ async def transcribe_video_asset(*, video_asset_id: UUID, requested_language: st
                 asset.transcript_ingested_at = now if transcript_ingested else None
                 asset.transcription_completed_at = now
                 await db.commit()
+
+                # Best-effort: generate and persist an AI summary once we have transcript segments.
+                # This is intentionally decoupled from indexing/embeddings success: even if indexing
+                # fails, we still want a usable summary.
+                try:
+                    # Refresh in case another worker already wrote it.
+                    await db.refresh(asset)
+                    if asset.ai_summary is None:
+                        await generate_and_store_video_asset_summary(
+                            db=db,
+                            settings=settings,
+                            video_asset_id=asset.id,
+                            force=False,
+                        )
+                except Exception:
+                    # Never fail the transcription pipeline because summary generation failed.
+                    pass
         except subprocess.CalledProcessError:
             asset.status = "error"
             asset.transcription_error = "ffmpeg failed"

@@ -31,4 +31,9 @@ export async function listVideoAssetSegments(videoAssetId, { languageCode } = {}
   return request(`/api/v1/video-assets/${encodeURIComponent(videoAssetId)}/segments${qs}`, { method: "GET" });
 }
 
+export async function getVideoAssetSummary(videoAssetId) {
+  if (!videoAssetId) throw new Error("videoAssetId is required");
+  return request(`/api/v1/video-assets/${encodeURIComponent(videoAssetId)}/summary`, { method: "GET" });
+}
+
 

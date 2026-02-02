@@ -109,6 +109,8 @@ async def test_transcription_pipeline_persists_segments(monkeypatch) -> None:
     monkeypatch.setenv("S3_BUCKET", "classmate")
     monkeypatch.setenv("RUNPOD_API_KEY", "test")
     monkeypatch.setenv("RUNPOD_ENDPOINT_ID", "endpoint")
+    # Make tests deterministic regardless of developer env: always use runsync path.
+    monkeypatch.setenv("RUNPOD_USE_RUNSYNC", "1")
     get_settings.cache_clear()
     settings = get_settings()
 
@@ -229,6 +231,7 @@ async def test_transcription_pipeline_errors_on_empty_segments(monkeypatch) -> N
     monkeypatch.setenv("S3_BUCKET", "classmate")
     monkeypatch.setenv("RUNPOD_API_KEY", "test")
     monkeypatch.setenv("RUNPOD_ENDPOINT_ID", "endpoint")
+    monkeypatch.setenv("RUNPOD_USE_RUNSYNC", "1")
     get_settings.cache_clear()
     settings = get_settings()
 

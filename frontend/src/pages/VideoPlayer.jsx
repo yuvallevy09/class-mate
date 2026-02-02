@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
@@ -15,17 +15,16 @@ import {
 } from "lucide-react";
 
 import { createPageUrl } from "@/utils";
-import { getCourse } from "@/api/courses";
 import { getCourseContent, getDownloadUrl } from "@/api/courseContents";
-import { listVideoAssets, listVideoAssetSegments } from "@/api/videoAssets";
+import { getVideoAssetSummary, listVideoAssets, listVideoAssetSegments } from "@/api/videoAssets";
 import { sendVideoChat } from "@/api/chat";
 
 import Navbar from "@/components/Navbar";
 import CourseSidebar from "@/components/CourseSidebar";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "@/components/ui/use-toast";
+import RichTextEditor from "@/components/RichTextEditor";
 
 function fmtTimestamp(seconds) {
   const s = Math.max(0, Number(seconds || 0));
@@ -108,19 +107,22 @@ function extractPlainText(node) {
 }
 
 export default function VideoPlayer() {
-  const urlParams = new URLSearchParams(window.location.search);
-  const courseId = urlParams.get("courseId");
-  const contentId = urlParams.get("contentId");
+  const location = useLocation();
+  const { courseId, contentId } = useMemo(() => {
+    const urlParams = new URLSearchParams(location.search);
+    return {
+      courseId: urlParams.get("courseId"),
+      contentId: urlParams.get("contentId"),
+    };
+  }, [location.search]);
 
   const [message, setMessage] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [messages, setMessages] = useState([]);
-  const [note, setNote] = useState("");
+  const [noteDoc, setNoteDoc] = useState(null);
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(true);
   const [isChatOpen, setIsChatOpen] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
-  const [aiSummary, setAiSummary] = useState("");
   const [isSummaryExpanded, setIsSummaryExpanded] = useState(true);
 
   const messagesEndRef = useRef(null);
@@ -136,17 +138,29 @@ export default function VideoPlayer() {
     if (!noteStorageKey) return;
     try {
       const saved = window.localStorage.getItem(noteStorageKey);
-      if (typeof saved === "string") setNote(saved);
+      if (!saved) return;
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === "object") {
+          setNoteDoc(parsed);
+          return;
+        }
+      } catch {
+        // Migrate legacy plain-text notes into TipTap JSON
+        setNoteDoc({
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: String(saved) }],
+            },
+          ],
+        });
+      }
     } catch {
       // ignore
     }
   }, [noteStorageKey]);
-
-  const { data: course } = useQuery({
-    queryKey: ["course", courseId],
-    queryFn: () => getCourse(courseId),
-    enabled: !!courseId,
-  });
 
   const { data: content } = useQuery({
     queryKey: ["contentById", contentId],
@@ -181,10 +195,39 @@ export default function VideoPlayer() {
     enabled: !!videoAssetId,
   });
 
+  const {
+    data: videoSummary,
+    isLoading: isSummaryLoading,
+    isFetching: isSummaryFetching,
+    error: summaryFetchError,
+    refetch: refetchSummary,
+  } = useQuery({
+    queryKey: ["videoAssetSummary", videoAssetId],
+    queryFn: () => getVideoAssetSummary(videoAssetId),
+    enabled: !!videoAssetId,
+    // Poll while the asset is still processing and no summary has been stored yet.
+    refetchInterval: (data) => {
+      const status = String(data?.status || activeVideoAsset?.status || "").toLowerCase();
+      const hasSummary = !!String(data?.aiSummary || "").trim();
+      const processing = ["uploaded", "processing", "extracting_audio", "transcribing"].includes(status);
+      return !hasSummary && processing ? 2000 : false;
+    },
+  });
+
+  // Reset per-video transient UI state when navigating between videos.
+  useEffect(() => {
+    setMessage("");
+    setIsTyping(false);
+    setMessages([]);
+    setIsSummaryExpanded(true);
+    setNoteDoc(null);
+  }, [courseId, contentId]);
+
   const handleSaveNote = () => {
     if (!noteStorageKey) return;
     try {
-      window.localStorage.setItem(noteStorageKey, String(note || ""));
+      const payload = noteDoc || { type: "doc", content: [{ type: "paragraph" }] };
+      window.localStorage.setItem(noteStorageKey, JSON.stringify(payload));
       toast({ title: "Saved", description: "Your note was saved in this browser." });
     } catch (e) {
       toast({
@@ -218,7 +261,8 @@ export default function VideoPlayer() {
     window.setTimeout(() => seekToSeconds(seconds), 80);
   };
 
-  const aiSummaryMarkdown = useMemo(() => linkifySummaryTimestamps(aiSummary), [aiSummary]);
+  const aiSummaryText = String(videoSummary?.aiSummary || "").trim();
+  const aiSummaryMarkdown = useMemo(() => linkifySummaryTimestamps(aiSummaryText), [aiSummaryText]);
 
   const handleSend = async () => {
     const userMessage = String(message || "").trim();
@@ -264,25 +308,6 @@ export default function VideoPlayer() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, isTyping]);
-
-  useEffect(() => {
-    if (!contentId || !courseId) return;
-    if (aiSummary || isGeneratingSummary) return;
-    setIsGeneratingSummary(true);
-    sendVideoChat({
-      courseId,
-      mode: "summary",
-      message: "",
-      history: [],
-      contentId,
-      videoAssetId,
-    })
-      .then((res) => setAiSummary(String(res?.text || "").trim()))
-      .catch(() => {
-        // best-effort
-      })
-      .finally(() => setIsGeneratingSummary(false));
-  }, [contentId, courseId, videoAssetId, aiSummary, isGeneratingSummary]);
 
   return (
     <div className="min-h-screen flex flex-col relative overflow-hidden">
@@ -351,12 +376,13 @@ export default function VideoPlayer() {
                 <h2 className="text-xl font-semibold">My Notes</h2>
               </div>
 
-              <Textarea
-                placeholder="Write your notes here..."
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                className="flex-1 bg-white/5 border-white/10 text-white placeholder:text-gray-500 resize-none"
-              />
+              <div className="flex-1 min-h-0">
+                <RichTextEditor
+                  initialContent={noteDoc}
+                  onChange={(doc) => setNoteDoc(doc)}
+                  placeholder="Write your notes here..."
+                />
+              </div>
 
               <Button onClick={handleSaveNote} className="btn-gradient mt-4 w-full">
                 Save Note
@@ -493,7 +519,7 @@ export default function VideoPlayer() {
 
                       <div className="p-4 border-t border-white/5 shrink-0">
                         <div className="glass-card rounded-xl p-2 flex items-end gap-2">
-                          <Textarea
+                          <textarea
                             ref={textareaRef}
                             placeholder="Ask a question..."
                             value={message}
@@ -545,12 +571,38 @@ export default function VideoPlayer() {
                     exit={{ height: 0, opacity: 0 }}
                     transition={{ duration: 0.2 }}
                   >
-                    {isGeneratingSummary ? (
+                    {isSummaryLoading || isSummaryFetching ? (
                       <div className="text-center py-12">
                         <Loader2 className="w-12 h-12 text-purple-400 mx-auto mb-3 animate-spin" />
-                        <p className="text-gray-400">Generating summary...</p>
+                        <p className="text-gray-400">Loading summary...</p>
                       </div>
-                    ) : aiSummary ? (
+                    ) : summaryFetchError ? (
+                      <div className="text-center py-12">
+                        <Sparkles className="w-12 h-12 text-gray-500 mx-auto mb-3" />
+                        <p className="text-gray-500">Couldn’t load the stored summary.</p>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="mt-3 border border-white/10 hover:bg-white/5 text-gray-200"
+                          onClick={() => refetchSummary()}
+                        >
+                          Try again
+                        </Button>
+                      </div>
+                    ) : videoSummary?.aiSummaryError ? (
+                      <div className="text-center py-12">
+                        <Sparkles className="w-12 h-12 text-gray-500 mx-auto mb-3" />
+                        <p className="text-gray-500">{String(videoSummary.aiSummaryError)}</p>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="mt-3 border border-white/10 hover:bg-white/5 text-gray-200"
+                          onClick={() => refetchSummary()}
+                        >
+                          Refresh
+                        </Button>
+                      </div>
+                    ) : aiSummaryText ? (
                       <div className="text-gray-300 text-sm leading-relaxed max-h-[400px] overflow-y-auto pr-2">
                         <ReactMarkdown
                           remarkPlugins={[remarkGfm]}
@@ -634,6 +686,14 @@ export default function VideoPlayer() {
                         >
                           {String(aiSummaryMarkdown || "")}
                         </ReactMarkdown>
+                      </div>
+                    ) : activeVideoAsset?.status &&
+                      ["uploaded", "processing", "extracting_audio", "transcribing"].includes(
+                        String(activeVideoAsset.status || "").toLowerCase()
+                      ) ? (
+                      <div className="text-center py-12">
+                        <Loader2 className="w-12 h-12 text-purple-400 mx-auto mb-3 animate-spin" />
+                        <p className="text-gray-400">Summary will appear when processing completes…</p>
                       </div>
                     ) : (
                       <div className="text-center py-12">

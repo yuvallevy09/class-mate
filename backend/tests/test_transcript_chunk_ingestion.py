@@ -106,15 +106,17 @@ async def test_transcript_segments_are_ingested_into_content_chunks(monkeypatch)
             )
             await session.commit()
 
-            n = await ingest_video_asset_transcript_to_chunks(db=session, video_asset_id=asset.id, language_code="en")
+            res_ingest = await ingest_video_asset_transcript_to_chunks(
+                db=session, video_asset_id=asset.id, language_code="en"
+            )
             await session.commit()
-            assert n >= 1
+            assert res_ingest.chunks_written >= 1
 
             res = await session.execute(
                 select(ContentChunk).where(ContentChunk.content_id == content.id).order_by(ContentChunk.chunk_index.asc())
             )
             chunks = list(res.scalars().all())
-            assert len(chunks) == n
+            assert len(chunks) == res_ingest.chunks_written
             assert chunks[0].meta.get("doc_type") == "segment"
             assert chunks[0].meta.get("video_asset_id") == str(asset.id)
             assert chunks[0].meta.get("language_code") == "en"

@@ -47,6 +47,11 @@ class VideoAsset(Base):
     transcription_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     transcript_ingested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # Stored AI summary (generated once, persisted for stable UX).
+    ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_summary_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ai_summary_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

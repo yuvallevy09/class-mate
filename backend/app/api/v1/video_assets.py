@@ -21,6 +21,7 @@ from app.schemas.transcript_segment import TranscriptSegmentPublic
 from app.schemas.course_content import CourseContentPublic
 from app.schemas.video_asset import VideoAssetCreate, VideoAssetPublic
 from app.services.transcription import transcribe_video_asset
+from app.services.video_summary import generate_and_store_video_asset_summary
 
 router = APIRouter(tags=["video-assets"])
 
@@ -52,6 +53,13 @@ class FinalizeVideoRequest(BaseModel):
 class FinalizeVideoResponse(BaseModel):
     content: CourseContentPublic
     video_asset: VideoAssetPublic = Field(serialization_alias="videoAsset")
+
+class VideoAssetSummaryPublic(BaseModel):
+    video_asset_id: UUID = Field(serialization_alias="videoAssetId")
+    status: str
+    ai_summary: str | None = Field(default=None, serialization_alias="aiSummary")
+    ai_summary_generated_at: datetime | None = Field(default=None, serialization_alias="aiSummaryGeneratedAt")
+    ai_summary_error: str | None = Field(default=None, serialization_alias="aiSummaryError")
 
 
 async def _get_owned_course(db: AsyncSession, *, course_id: UUID, user_id: int) -> Course:
@@ -390,6 +398,48 @@ async def list_video_asset_segments(
     stmt = stmt.order_by(TranscriptSegment.start_sec.asc())
     seg_res = await db.execute(stmt)
     return list(seg_res.scalars().all())
+
+
+@router.get("/video-assets/{video_asset_id}/summary", response_model=VideoAssetSummaryPublic)
+async def get_video_asset_summary(
+    video_asset_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+) -> VideoAssetSummaryPublic:
+    # Ownership check via join.
+    res = await db.execute(
+        select(VideoAsset, Course)
+        .join(Course, Course.id == VideoAsset.course_id)
+        .where(VideoAsset.id == video_asset_id, Course.user_id == current_user.id)
+    )
+    row = res.first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video asset not found")
+    asset: VideoAsset = row[0]
+
+    # If missing but transcript exists (e.g. older assets), best-effort backfill on first request.
+    # This keeps the UX stable: once generated, all future visits reuse the stored summary.
+    if not asset.ai_summary and asset.status in {"done", "done_no_embeddings", "done_no_index"}:
+        try:
+            await generate_and_store_video_asset_summary(
+                db=db,
+                settings=settings,
+                video_asset_id=asset.id,
+                force=False,
+            )
+            await db.refresh(asset)
+        except Exception:
+            # best-effort: fall through and return current fields
+            pass
+
+    return VideoAssetSummaryPublic(
+        video_asset_id=asset.id,
+        status=str(asset.status or ""),
+        ai_summary=asset.ai_summary,
+        ai_summary_generated_at=asset.ai_summary_generated_at,
+        ai_summary_error=asset.ai_summary_error,
+    )
 
 
 @router.post("/video-assets/{video_asset_id}/transcribe")
