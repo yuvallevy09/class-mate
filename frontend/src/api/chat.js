@@ -19,6 +19,27 @@ export async function sendCourseChat({ courseId, message, conversationId = null 
   });
 }
 
+export async function sendVideoChat({
+  courseId,
+  mode = "chat",
+  message = "",
+  history = [],
+  contentId = null,
+  videoAssetId = null,
+} = {}) {
+  if (!courseId) throw new Error("courseId is required");
+  return request(`/api/v1/courses/${encodeURIComponent(courseId)}/video-chat`, {
+    method: "POST",
+    body: {
+      mode,
+      message,
+      history,
+      contentId: contentId ?? null,
+      videoAssetId: videoAssetId ?? null,
+    },
+  });
+}
+
 export async function deleteConversation(conversationId) {
   if (!conversationId) throw new Error("conversationId is required");
   return request(`/api/v1/conversations/${encodeURIComponent(conversationId)}`, { method: "DELETE" });

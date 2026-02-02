@@ -17,6 +17,11 @@ export async function deleteCourseContent(contentId) {
   return request(`/api/v1/contents/${encodeURIComponent(contentId)}`, { method: "DELETE" });
 }
 
+export async function getCourseContent(contentId) {
+  if (!contentId) throw new Error("contentId is required");
+  return request(`/api/v1/contents/${encodeURIComponent(contentId)}`, { method: "GET" });
+}
+
 export async function getDownloadUrl(contentId) {
   return request(`/api/v1/contents/${encodeURIComponent(contentId)}/download`, { method: "GET" });
 }

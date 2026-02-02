@@ -25,4 +25,10 @@ export async function transcribeVideoAsset(videoAssetId, payload = {}) {
   });
 }
 
+export async function listVideoAssetSegments(videoAssetId, { languageCode } = {}) {
+  if (!videoAssetId) throw new Error("videoAssetId is required");
+  const qs = languageCode ? `?language_code=${encodeURIComponent(languageCode)}` : "";
+  return request(`/api/v1/video-assets/${encodeURIComponent(videoAssetId)}/segments${qs}`, { method: "GET" });
+}
+
 

@@ -3,11 +3,13 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timezone
+from typing import Literal
 from uuid import UUID
 
 import boto3
 from botocore.config import Config
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,7 +21,9 @@ from app.db.models.chat_conversation import ChatConversation
 from app.db.models.chat_message import ChatMessage
 from app.db.models.course import Course
 from app.db.models.course_content import CourseContent
+from app.db.models.transcript_segment import TranscriptSegment
 from app.db.models.user import User
+from app.db.models.video_asset import VideoAsset
 from app.db.session import get_db, get_session_maker
 from app.rag.hybrid_retrieve import HybridRetrieveConfig, retrieve_course_hybrid_hits
 from app.schemas.chat import ChatCitation, CourseChatRequest, CourseChatResponse
@@ -27,6 +31,36 @@ from app.schemas.chat_persistence import ChatConversationPublic, ChatMessagePubl
 
 router = APIRouter(tags=["chat"])
 logger = logging.getLogger(__name__)
+
+
+class VideoChatHistoryItem(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(default="", max_length=4000)
+
+    @field_validator("content")
+    @classmethod
+    def _strip_content(cls, v: str) -> str:
+        return (v or "").strip()
+
+
+class VideoChatRequest(BaseModel):
+    # For mode="chat", this is the user's question. For mode="summary", it can be empty.
+    message: str = Field(default="", max_length=4000)
+    history: list[VideoChatHistoryItem] = Field(default_factory=list)
+    mode: Literal["chat", "summary"] = "chat"
+
+    # Optional identifiers for video-scoped context.
+    content_id: UUID | None = Field(default=None, validation_alias="contentId")
+    video_asset_id: UUID | None = Field(default=None, validation_alias="videoAssetId")
+
+    @field_validator("message")
+    @classmethod
+    def _strip_message(cls, v: str) -> str:
+        return (v or "").strip()
+
+
+class VideoChatResponse(BaseModel):
+    text: str
 
 
 def _s3_client(settings: Settings):
@@ -155,6 +189,169 @@ async def _ensure_owned_course(db: AsyncSession, *, course_id: UUID, user_id: in
     if course is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course not found")
     return course
+
+
+def _fmt_timestamp(seconds: float) -> str:
+    try:
+        s = max(0.0, float(seconds or 0.0))
+    except Exception:
+        s = 0.0
+    mm = int(s // 60)
+    ss = int(s % 60)
+    return f"{mm}:{ss:02d}"
+
+
+async def _build_video_context(
+    *,
+    db: AsyncSession,
+    course_id: UUID,
+    content_id: UUID | None,
+    video_asset_id: UUID | None,
+    max_chars: int = 6000,
+) -> tuple[str, UUID | None]:
+    """
+    Build a compact, video-scoped context string for ephemeral VideoPlayer chat/summary.
+    Returns (context, resolved_video_asset_id).
+    """
+    lines: list[str] = []
+    resolved_asset_id: UUID | None = None
+
+    if content_id is not None:
+        cres = await db.execute(
+            select(CourseContent).where(CourseContent.id == content_id, CourseContent.course_id == course_id)
+        )
+        content = cres.scalar_one_or_none()
+        if content is not None:
+            lines.append(f'Video title: {str(content.title or "").strip()}')
+            desc = (content.description or "").strip()
+            if desc:
+                lines.append(f"Video description: {desc}")
+
+    asset: VideoAsset | None = None
+    if video_asset_id is not None:
+        ares = await db.execute(
+            select(VideoAsset).where(VideoAsset.id == video_asset_id, VideoAsset.course_id == course_id)
+        )
+        asset = ares.scalar_one_or_none()
+    elif content_id is not None:
+        ares = await db.execute(
+            select(VideoAsset).where(VideoAsset.content_id == content_id, VideoAsset.course_id == course_id)
+        )
+        asset = ares.scalar_one_or_none()
+
+    if asset is not None:
+        resolved_asset_id = asset.id
+
+        seg_res = await db.execute(
+            select(TranscriptSegment)
+            .where(TranscriptSegment.video_asset_id == asset.id)
+            .order_by(TranscriptSegment.start_sec.asc())
+        )
+        segs = list(seg_res.scalars().all())
+        if segs:
+            lines.append("")
+            lines.append("Transcript excerpt (timestamped):")
+            budget = max(0, int(max_chars))
+            used = sum(len(x) + 1 for x in lines)
+            for seg in segs:
+                row = f"[{_fmt_timestamp(seg.start_sec)}] {(seg.text or '').strip()}"
+                if not row.strip():
+                    continue
+                if used + len(row) + 1 > budget:
+                    lines.append("…")
+                    break
+                lines.append(row)
+                used += len(row) + 1
+
+    return ("\n".join([x for x in lines if x is not None]).strip(), resolved_asset_id)
+
+
+@router.post("/courses/{course_id}/video-chat", response_model=VideoChatResponse)
+async def course_video_chat(
+    course_id: UUID,
+    body: VideoChatRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+) -> VideoChatResponse:
+    """
+    Ephemeral, video-scoped chat endpoint for the VideoPlayer page.
+
+    - Does NOT persist conversations or messages.
+    - Accepts client-provided history and optionally enriches with transcript excerpt.
+    """
+    course = await _ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
+
+    if body.content_id is None and body.video_asset_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contentId or videoAssetId is required")
+
+    # Cap history at the server boundary (trust-but-verify).
+    max_n = int(settings.chat_history_max_messages)
+    hist_items = (body.history or [])[-max_n:] if max_n > 0 else []
+    history: list[ChatHistoryItem] = [
+        ChatHistoryItem(role=h.role, content=(h.content or "").strip())
+        for h in hist_items
+        if (h.content or "").strip()
+    ]
+
+    video_ctx, _resolved_asset_id = await _build_video_context(
+        db=db,
+        course_id=course.id,
+        content_id=body.content_id,
+        video_asset_id=body.video_asset_id,
+        max_chars=6000,
+    )
+
+    mode = str(body.mode or "chat").strip().lower()
+    if mode not in {"chat", "summary"}:
+        mode = "chat"
+
+    if mode == "summary":
+        user_message = "\n".join(
+            [
+                "Generate a comprehensive AI summary for the video lecture below.",
+                "Requirements:",
+                "- Cover main topics, key concepts, and takeaways.",
+                "- Use clear sections and bullets where helpful.",
+                "- If the transcript excerpt is missing or insufficient, say what you are missing.",
+                "",
+                video_ctx,
+                "",
+                "Now write the summary.",
+            ]
+        ).strip()
+    else:
+        user_q = (body.message or "").strip()
+        if not user_q:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="message is required for chat")
+        user_message = "\n".join(
+            [
+                "The student is watching a video lecture. Use the video context below to answer the student's question.",
+                "If the transcript excerpt is missing or insufficient, ask a clarifying question.",
+                "",
+                video_ctx,
+                "",
+                f"Student question: {user_q}",
+            ]
+        ).strip()
+
+    engine = ChatEngine(settings)
+    try:
+        text, _citations = await engine.generate_reply(
+            user_id=current_user.id,
+            course_id=course.id,
+            course_name=str(course.name),
+            course_description=str(course.description or ""),
+            history=history,
+            user_message=user_message,
+            rag_hits=None,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="LLM request failed") from e
+
+    return VideoChatResponse(text=str(text or "").strip())
 
 
 @router.post("/courses/{course_id}/chat", response_model=CourseChatResponse)

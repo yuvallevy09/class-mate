@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { getCourse } from "@/api/courses";
 import { listCourseContents, createCourseContent, deleteCourseContent, getDownloadUrl } from "@/api/courseContents";
 import { presignUpload } from "@/api/uploads";
@@ -16,6 +17,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { toast } from "@/components/ui/use-toast";
+import { createPageUrl } from "@/utils";
 import Navbar from "@/components/Navbar";
 import CourseSidebar from "@/components/CourseSidebar";
 
@@ -36,6 +38,7 @@ const FILE_ICONS = {
 };
 
 export default function CourseContent() {
+  const navigate = useNavigate();
   const urlParams = new URLSearchParams(window.location.search);
   const courseId = urlParams.get("courseId");
   const rawCategory = urlParams.get("category");
@@ -62,7 +65,6 @@ export default function CourseContent() {
   const [viewMode, setViewMode] = useState("grid");
   const [newContent, setNewContent] = useState({ title: "", description: "", file: null });
   const [kickoffNotice, setKickoffNotice] = useState(null);
-  const [videoPlayer, setVideoPlayer] = useState({ open: false, url: null, title: null });
   
   const queryClient = useQueryClient();
 
@@ -239,13 +241,13 @@ export default function CourseContent() {
 
   const handleViewFile = async (item) => {
     try {
-      const res = await getDownloadUrl(item.id);
-      if (!res?.url) return;
       const mt = (item?.mime_type || "").toLowerCase();
       if (mt.startsWith("video/")) {
-        setVideoPlayer({ open: true, url: res.url, title: item?.title || "Video" });
+        navigate(createPageUrl(`VideoPlayer?courseId=${courseId}&contentId=${item.id}`));
         return;
       }
+      const res = await getDownloadUrl(item.id);
+      if (!res?.url) return;
       window.open(res.url, "_blank", "noopener,noreferrer");
     } catch (e) {
       console.error(e);
@@ -612,34 +614,6 @@ export default function CourseContent() {
                 isVideosPage ? "Add Video" : "Add Content"
               )}
             </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Video Player Dialog */}
-      <Dialog
-        open={!!videoPlayer.open}
-        onOpenChange={(open) => setVideoPlayer((prev) => ({ ...prev, open }))}
-      >
-        <DialogContent className="bg-[#131313] border-white/10 text-white max-w-6xl">
-          <DialogHeader>
-            <DialogTitle className="text-xl font-bold">
-              {videoPlayer.title || "Video"}
-            </DialogTitle>
-            <DialogDescription className="text-gray-400">
-              Playing from a secure, temporary link.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="mt-3">
-            <div className="rounded-2xl overflow-hidden bg-black/60 border border-white/10">
-              <video
-                key={videoPlayer.url || "video"}
-                src={videoPlayer.url || undefined}
-                controls
-                playsInline
-                className="w-full max-h-[75vh] bg-black"
-              />
-            </div>
           </div>
         </DialogContent>
       </Dialog>

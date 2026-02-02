@@ -65,6 +65,23 @@ async def list_course_contents(
     return list(res.scalars().all())
 
 
+@router.get("/contents/{content_id}", response_model=CourseContentPublic)
+async def get_course_content(
+    content_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> CourseContent:
+    res = await db.execute(
+        select(CourseContent, Course)
+        .join(Course, Course.id == CourseContent.course_id)
+        .where(CourseContent.id == content_id, Course.user_id == current_user.id)
+    )
+    row = res.first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content not found")
+    return row[0]
+
+
 @router.post("/courses/{course_id}/contents", response_model=CourseContentPublic)
 async def create_course_content(
     course_id: UUID,
