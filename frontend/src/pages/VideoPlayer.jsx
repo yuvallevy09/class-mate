@@ -13,6 +13,7 @@ import {
   Send,
   Loader2,
   Maximize2,
+  Minimize2,
 } from "lucide-react";
 
 import { createPageUrl } from "@/utils";
@@ -25,7 +26,7 @@ import CourseSidebar from "@/components/CourseSidebar";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "@/components/ui/use-toast";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import RichTextEditor from "@/components/RichTextEditor";
 
 function fmtTimestamp(seconds) {
@@ -268,6 +269,85 @@ export default function VideoPlayer() {
   const aiSummaryText = String(videoSummary?.aiSummary || "").trim();
   const aiSummaryMarkdown = useMemo(() => linkifySummaryTimestamps(aiSummaryText), [aiSummaryText]);
 
+  const markdownComponents = useMemo(
+    () => ({
+      p: ({ children }) => <p className="my-2 whitespace-pre-wrap">{children}</p>,
+      strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+      em: ({ children }) => <em className="italic">{children}</em>,
+      ul: ({ children }) => <ul className="my-2 ml-5 list-disc space-y-1">{children}</ul>,
+      ol: ({ children }) => <ol className="my-2 ml-5 list-decimal space-y-1">{children}</ol>,
+      li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+      a: ({ children, href }) => {
+        const h = String(href || "");
+        const label = extractPlainText(children).trim();
+
+        // Primary: our synthetic timestamp links.
+        if (h.toLowerCase().startsWith("videotime:")) {
+          const rest = h.slice("videotime:".length);
+          const startStr = rest.split(/[-–]/)[0];
+          const start = Number(startStr);
+          return (
+            <button
+              type="button"
+              className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
+              onClick={() => {
+                if (Number.isFinite(start)) seekAndScrollToSeconds(start);
+              }}
+            >
+              {children}
+            </button>
+          );
+        }
+
+        // Fallback: if the link text itself looks like a timestamp or range, treat it as in-page seek.
+        // This prevents any navigation even if the model outputs a different href.
+        if (/^\d{1,3}:[0-5]\d(–\d{1,3}:[0-5]\d)?$/.test(label)) {
+          const startTs = label.split("–")[0];
+          const start = parseTimestampToSeconds(startTs);
+          return (
+            <button
+              type="button"
+              className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
+              onClick={() => {
+                if (typeof start === "number") seekAndScrollToSeconds(start);
+              }}
+            >
+              {children}
+            </button>
+          );
+        }
+
+        return (
+          <a
+            href={h}
+            target="_blank"
+            rel="noreferrer"
+            className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
+          >
+            {children}
+          </a>
+        );
+      },
+      code: ({ className, children }) => {
+        const isBlock = String(className || "").includes("language-");
+        if (isBlock) return <code className={className}>{children}</code>;
+        return (
+          <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.95em]">
+            {children}
+          </code>
+        );
+      },
+      pre: ({ children }) => (
+        <pre className="my-3 overflow-x-auto rounded-xl bg-black/40 p-4 text-sm">{children}</pre>
+      ),
+      h1: ({ children }) => <h1 className="mt-4 mb-2 text-lg font-semibold">{children}</h1>,
+      h2: ({ children }) => <h2 className="mt-4 mb-2 text-base font-semibold">{children}</h2>,
+      h3: ({ children }) => <h3 className="mt-3 mb-2 text-sm font-semibold">{children}</h3>,
+      hr: () => <hr className="my-4 border-white/10" />,
+    }),
+    [seekAndScrollToSeconds]
+  );
+
   const handleSend = async () => {
     const userMessage = String(message || "").trim();
     if (!userMessage || isTyping || !courseId) return;
@@ -315,11 +395,18 @@ export default function VideoPlayer() {
     setIsChatOpen(false);
   };
 
+  const closeChatPopout = () => {
+    setIsChatPopoutOpen(false);
+    if (chatWasOpenRef.current) setIsChatOpen(true);
+  };
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, isTyping]);
 
-  const renderChatPanel = ({ scrollHeightClass }) => (
+  const renderChatPanel = ({ scrollHeightClass, variant }) => {
+    const isPopout = variant === "popout";
+    return (
     <motion.div
       initial={{ height: 0, opacity: 0 }}
       animate={{ height: "auto", opacity: 1 }}
@@ -332,24 +419,38 @@ export default function VideoPlayer() {
           <h2 className="text-lg font-semibold">Chat</h2>
         </div>
         <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={openChatPopout}
-            className="text-gray-400 hover:text-white hover:bg-white/5"
-            aria-label="Pop out chat"
-          >
-            <Maximize2 className="w-5 h-5" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setIsChatOpen(false)}
-            className="text-gray-400 hover:text-white hover:bg-white/5"
-            aria-label="Close chat"
-          >
-            <X className="w-5 h-5" />
-          </Button>
+          {isPopout ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={closeChatPopout}
+              className="text-gray-400 hover:text-white hover:bg-white/5"
+              aria-label="Minimize chat"
+            >
+              <Minimize2 className="w-5 h-5" />
+            </Button>
+          ) : (
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={openChatPopout}
+                className="text-gray-400 hover:text-white hover:bg-white/5"
+                aria-label="Pop out chat"
+              >
+                <Maximize2 className="w-5 h-5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setIsChatOpen(false)}
+                className="text-gray-400 hover:text-white hover:bg-white/5"
+                aria-label="Close chat"
+              >
+                <X className="w-5 h-5" />
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
@@ -376,7 +477,15 @@ export default function VideoPlayer() {
                       : "glass-card text-gray-100"
                   }`}
                 >
-                  <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                  {msg.role === "assistant" ? (
+                    <div className="text-sm leading-relaxed">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                        {String(linkifySummaryTimestamps(msg.content || "") || "")}
+                      </ReactMarkdown>
+                    </div>
+                  ) : (
+                    <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                  )}
                 </div>
               </div>
             </motion.div>
@@ -414,7 +523,8 @@ export default function VideoPlayer() {
         </div>
       </div>
     </motion.div>
-  );
+    );
+  };
 
   return (
     <div className="min-h-screen flex flex-col relative overflow-hidden">
@@ -565,7 +675,7 @@ export default function VideoPlayer() {
                 {/* Chat */}
                 <AnimatePresence>
                   {isChatOpen && (
-                    renderChatPanel({ scrollHeightClass: "h-[300px]" })
+                    renderChatPanel({ scrollHeightClass: "h-[300px]", variant: "sidebar" })
                   )}
                 </AnimatePresence>
               </motion.div>
@@ -633,83 +743,7 @@ export default function VideoPlayer() {
                       <div className="text-gray-300 text-sm leading-relaxed max-h-[400px] overflow-y-auto pr-2">
                         <ReactMarkdown
                           remarkPlugins={[remarkGfm]}
-                          components={{
-                            p: ({ children }) => <p className="my-2 whitespace-pre-wrap">{children}</p>,
-                            strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-                            em: ({ children }) => <em className="italic">{children}</em>,
-                            ul: ({ children }) => <ul className="my-2 ml-5 list-disc space-y-1">{children}</ul>,
-                            ol: ({ children }) => <ol className="my-2 ml-5 list-decimal space-y-1">{children}</ol>,
-                            li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-                            a: ({ children, href }) => {
-                              const h = String(href || "");
-                              const label = extractPlainText(children).trim();
-
-                              // Primary: our synthetic timestamp links.
-                              if (h.toLowerCase().startsWith("videotime:")) {
-                                const rest = h.slice("videotime:".length);
-                                const startStr = rest.split(/[-–]/)[0];
-                                const start = Number(startStr);
-                                return (
-                                  <button
-                                    type="button"
-                                    className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
-                                    onClick={() => {
-                                      if (Number.isFinite(start)) seekAndScrollToSeconds(start);
-                                    }}
-                                  >
-                                    {children}
-                                  </button>
-                                );
-                              }
-
-                              // Fallback: if the link text itself looks like a timestamp or range, treat it as in-page seek.
-                              // This prevents any navigation even if the model outputs a different href.
-                              if (/^\d{1,3}:[0-5]\d(–\d{1,3}:[0-5]\d)?$/.test(label)) {
-                                const startTs = label.split("–")[0];
-                                const start = parseTimestampToSeconds(startTs);
-                                return (
-                                  <button
-                                    type="button"
-                                    className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
-                                    onClick={() => {
-                                      if (typeof start === "number") seekAndScrollToSeconds(start);
-                                    }}
-                                  >
-                                    {children}
-                                  </button>
-                                );
-                              }
-
-                              return (
-                                <a
-                                  href={h}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
-                                >
-                                  {children}
-                                </a>
-                              );
-                            },
-                            code: ({ className, children }) => {
-                              const isBlock = String(className || "").includes("language-");
-                              if (isBlock) return <code className={className}>{children}</code>;
-                              return (
-                                <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.95em]">
-                                  {children}
-                                </code>
-                              );
-                            },
-                            pre: ({ children }) => (
-                              <pre className="my-3 overflow-x-auto rounded-xl bg-black/40 p-4 text-sm">
-                                {children}
-                              </pre>
-                            ),
-                            h1: ({ children }) => <h1 className="mt-4 mb-2 text-lg font-semibold">{children}</h1>,
-                            h2: ({ children }) => <h2 className="mt-4 mb-2 text-base font-semibold">{children}</h2>,
-                            h3: ({ children }) => <h3 className="mt-3 mb-2 text-sm font-semibold">{children}</h3>,
-                            hr: () => <hr className="my-4 border-white/10" />,
-                          }}
+                          components={markdownComponents}
                         >
                           {String(aiSummaryMarkdown || "")}
                         </ReactMarkdown>
@@ -750,16 +784,11 @@ export default function VideoPlayer() {
           if (!open && chatWasOpenRef.current) setIsChatOpen(true);
         }}
       >
-        <DialogContent className="glass-card border-white/10 bg-[#0F0F0F] text-white w-[min(960px,calc(100vw-2rem))] max-w-none p-0 overflow-hidden">
-          <DialogHeader className="p-4 border-b border-white/5">
-            <DialogTitle className="flex items-center gap-2">
-              <MessageSquare className="w-5 h-5 text-purple-400" />
-              Chat
-            </DialogTitle>
-          </DialogHeader>
-          <div className="p-4">
-            {renderChatPanel({ scrollHeightClass: "h-[60vh]" })}
-          </div>
+        <DialogContent
+          showClose={false}
+          className="border-0 bg-transparent p-0 shadow-none w-[min(960px,calc(100vw-2rem))] max-w-none"
+        >
+          {renderChatPanel({ scrollHeightClass: "h-[60vh]", variant: "popout" })}
         </DialogContent>
       </Dialog>
     </div>
