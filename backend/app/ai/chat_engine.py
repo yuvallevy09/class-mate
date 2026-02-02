@@ -135,9 +135,14 @@ class ChatEngine:
 
         Best-effort: returns None if a title can't be generated.
         """
-        text = generate_title_dspy(
-            settings=self._settings, course_name=course_name, first_user_message=first_user_message
-        )
+        text = ""
+        try:
+            text = generate_title_dspy(
+                settings=self._settings, course_name=course_name, first_user_message=first_user_message
+            )
+        except Exception:
+            # Fall back to a deterministic title derived from the first message.
+            text = ""
         return enforce_title_constraints(text, fallback_message=first_user_message)
 
     async def generate_reply(
