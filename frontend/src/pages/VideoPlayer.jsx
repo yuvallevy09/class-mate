@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   FileText,
   MessageSquare,
@@ -30,6 +32,79 @@ function fmtTimestamp(seconds) {
   const mm = Math.floor(s / 60);
   const ss = Math.floor(s % 60);
   return `${mm}:${String(ss).padStart(2, "0")}`;
+}
+
+function parseTimestampToSeconds(ts) {
+  const t = String(ts || "").trim();
+  const m = /^(\d{1,3}):([0-5]\d)$/.exec(t);
+  if (!m) return null;
+  const mm = Number(m[1]);
+  const ss = Number(m[2]);
+  if (!Number.isFinite(mm) || !Number.isFinite(ss)) return null;
+  return mm * 60 + ss;
+}
+
+function summarizeTimestampListToRanges(secondsList) {
+  // Keep order, de-dupe.
+  const uniq = [];
+  const seen = new Set();
+  for (const s of secondsList) {
+    const n = Number(s);
+    if (!Number.isFinite(n)) continue;
+    if (seen.has(n)) continue;
+    seen.add(n);
+    uniq.push(n);
+  }
+  if (!uniq.length) return [];
+
+  // Group "continuous" timestamps: allow 1–2s steps (matches common transcript chunking).
+  const groups = [];
+  let start = uniq[0];
+  let prev = uniq[0];
+  for (let i = 1; i < uniq.length; i += 1) {
+    const cur = uniq[i];
+    const diff = cur - prev;
+    if (diff >= 0 && diff <= 2) {
+      prev = cur;
+      continue;
+    }
+    groups.push([start, prev]);
+    start = cur;
+    prev = cur;
+  }
+  groups.push([start, prev]);
+  return groups;
+}
+
+function linkifySummaryTimestamps(text) {
+  // Example input: [#0:04, #0:06, #0:15]
+  // Output: ([0:04–0:06](videotime:4-6), [0:15](videotime:15))
+  const raw = String(text || "");
+  const re = /\[(?:#\s*\d{1,3}:[0-5]\d)(?:\s*,\s*#\s*\d{1,3}:[0-5]\d)*\]/g;
+  return raw.replace(re, (block) => {
+    const tsMatches = Array.from(block.matchAll(/#\s*(\d{1,3}:[0-5]\d)/g)).map((m) => m[1]);
+    const secs = tsMatches
+      .map(parseTimestampToSeconds)
+      .filter((v) => typeof v === "number");
+    if (!secs.length) return block;
+
+    const ranges = summarizeTimestampListToRanges(secs);
+    const links = ranges.map(([s, e]) => {
+      const label = s === e ? fmtTimestamp(s) : `${fmtTimestamp(s)}–${fmtTimestamp(e)}`;
+      const href = s === e ? `videotime:${s}` : `videotime:${s}-${e}`;
+      return `[${label}](${href})`;
+    });
+    return `(${links.join(", ")})`;
+  });
+}
+
+function extractPlainText(node) {
+  if (node == null) return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(extractPlainText).join("");
+  // React element-ish
+  if (typeof node === "object" && "props" in node) return extractPlainText(node.props?.children);
+  return "";
 }
 
 export default function VideoPlayer() {
@@ -130,6 +205,20 @@ export default function VideoPlayer() {
       // ignore
     }
   };
+
+  const seekAndScrollToSeconds = (seconds) => {
+    const el = videoRef.current;
+    if (!el) return;
+    try {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+    } catch {
+      // ignore
+    }
+    // Let the scroll start, then seek/play (matches the transcript UX feel).
+    window.setTimeout(() => seekToSeconds(seconds), 80);
+  };
+
+  const aiSummaryMarkdown = useMemo(() => linkifySummaryTimestamps(aiSummary), [aiSummary]);
 
   const handleSend = async () => {
     const userMessage = String(message || "").trim();
@@ -462,8 +551,89 @@ export default function VideoPlayer() {
                         <p className="text-gray-400">Generating summary...</p>
                       </div>
                     ) : aiSummary ? (
-                      <div className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap max-h-[400px] overflow-y-auto pr-2">
-                        {aiSummary}
+                      <div className="text-gray-300 text-sm leading-relaxed max-h-[400px] overflow-y-auto pr-2">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            p: ({ children }) => <p className="my-2 whitespace-pre-wrap">{children}</p>,
+                            strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                            em: ({ children }) => <em className="italic">{children}</em>,
+                            ul: ({ children }) => <ul className="my-2 ml-5 list-disc space-y-1">{children}</ul>,
+                            ol: ({ children }) => <ol className="my-2 ml-5 list-decimal space-y-1">{children}</ol>,
+                            li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+                            a: ({ children, href }) => {
+                              const h = String(href || "");
+                              const label = extractPlainText(children).trim();
+
+                              // Primary: our synthetic timestamp links.
+                              if (h.toLowerCase().startsWith("videotime:")) {
+                                const rest = h.slice("videotime:".length);
+                                const startStr = rest.split(/[-–]/)[0];
+                                const start = Number(startStr);
+                                return (
+                                  <button
+                                    type="button"
+                                    className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
+                                    onClick={() => {
+                                      if (Number.isFinite(start)) seekAndScrollToSeconds(start);
+                                    }}
+                                  >
+                                    {children}
+                                  </button>
+                                );
+                              }
+
+                              // Fallback: if the link text itself looks like a timestamp or range, treat it as in-page seek.
+                              // This prevents any navigation even if the model outputs a different href.
+                              if (/^\d{1,3}:[0-5]\d(–\d{1,3}:[0-5]\d)?$/.test(label)) {
+                                const startTs = label.split("–")[0];
+                                const start = parseTimestampToSeconds(startTs);
+                                return (
+                                  <button
+                                    type="button"
+                                    className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
+                                    onClick={() => {
+                                      if (typeof start === "number") seekAndScrollToSeconds(start);
+                                    }}
+                                  >
+                                    {children}
+                                  </button>
+                                );
+                              }
+
+                              return (
+                                <a
+                                  href={h}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
+                                >
+                                  {children}
+                                </a>
+                              );
+                            },
+                            code: ({ className, children }) => {
+                              const isBlock = String(className || "").includes("language-");
+                              if (isBlock) return <code className={className}>{children}</code>;
+                              return (
+                                <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.95em]">
+                                  {children}
+                                </code>
+                              );
+                            },
+                            pre: ({ children }) => (
+                              <pre className="my-3 overflow-x-auto rounded-xl bg-black/40 p-4 text-sm">
+                                {children}
+                              </pre>
+                            ),
+                            h1: ({ children }) => <h1 className="mt-4 mb-2 text-lg font-semibold">{children}</h1>,
+                            h2: ({ children }) => <h2 className="mt-4 mb-2 text-base font-semibold">{children}</h2>,
+                            h3: ({ children }) => <h3 className="mt-3 mb-2 text-sm font-semibold">{children}</h3>,
+                            hr: () => <hr className="my-4 border-white/10" />,
+                          }}
+                        >
+                          {String(aiSummaryMarkdown || "")}
+                        </ReactMarkdown>
                       </div>
                     ) : (
                       <div className="text-center py-12">
