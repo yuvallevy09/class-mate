@@ -15,6 +15,207 @@ import { toast } from "@/components/ui/use-toast";
 import Navbar from "@/components/Navbar";
 import CourseSidebar from "@/components/CourseSidebar";
 
+function fmtTimestamp(seconds) {
+  const s = Math.max(0, Number(seconds || 0));
+  const mm = Math.floor(s / 60);
+  const ss = Math.floor(s % 60);
+  return `${mm}:${String(ss).padStart(2, "0")}`;
+}
+
+function isVideoCitation(c) {
+  const extra = c?.extra || {};
+  const t = String(extra?.type || "").toLowerCase();
+  const contentId = c?.content_id || c?.contentId || null;
+  return t === "video" && !!contentId;
+}
+
+function getCitationContentId(c) {
+  return c?.content_id || c?.contentId || null;
+}
+
+function getCitationTitle(c) {
+  const extra = c?.extra || {};
+  return (
+    String(c?.title || "").trim() ||
+    String(extra?.original_filename || "").trim() ||
+    String(getCitationContentId(c) || "").trim() ||
+    "Course content"
+  );
+}
+
+function buildSourcesModel(citations = []) {
+  const items = Array.isArray(citations) ? citations : [];
+
+  // Video citations grouped by content_id.
+  const videoGroups = new Map(); // contentId -> { leaderIndex, title, ranges: Map(key -> {...}) }
+
+  // Non-video citations displayed individually (by original citation index).
+  const nonVideo = [];
+
+  items.forEach((c, idx) => {
+    const i = idx + 1; // original citation index (matches backend links #cm-src-{i})
+    if (!isVideoCitation(c)) {
+      nonVideo.push({ i, c });
+      return;
+    }
+
+    const contentId = String(getCitationContentId(c));
+    const extra = c?.extra || {};
+    const start = Number(extra?.startSec || 0);
+    const end = Number(extra?.endSec || start);
+    const sInt = Math.max(0, Math.floor(start));
+    const eInt = Math.max(0, Math.floor(end));
+    const rngKey = `${sInt}-${eInt}`;
+
+    if (!videoGroups.has(contentId)) {
+      videoGroups.set(contentId, {
+        contentId,
+        leaderIndex: i,
+        title: getCitationTitle(c),
+        // ranges: preserve insertion order by first appearance
+        ranges: new Map(),
+      });
+    }
+
+    const g = videoGroups.get(contentId);
+    g.leaderIndex = Math.min(g.leaderIndex, i);
+    if (!g.title) g.title = getCitationTitle(c);
+
+    if (!g.ranges.has(rngKey)) {
+      g.ranges.set(rngKey, {
+        s: sInt,
+        e: eInt,
+        // Use the first URL we see for the range
+        url: typeof c?.url === "string" ? c.url : null,
+        chapterTitle:
+          (typeof extra?.chapterTitle === "string" && extra.chapterTitle.trim()) ||
+          null,
+        citationIndices: [],
+      });
+    }
+
+    const r = g.ranges.get(rngKey);
+    if (!r.url && typeof c?.url === "string") r.url = c.url;
+    if (!r.chapterTitle && typeof extra?.chapterTitle === "string" && extra.chapterTitle.trim()) {
+      r.chapterTitle = extra.chapterTitle.trim();
+    }
+    r.citationIndices.push(i);
+  });
+
+  const video = Array.from(videoGroups.values())
+    .sort((a, b) => a.leaderIndex - b.leaderIndex)
+    .map((g) => {
+      const ranges = Array.from(g.ranges.values());
+      // Allocate letters a/b/c... by range order of appearance
+      const rangesWithLetters = ranges.map((r, idx) => ({
+        ...r,
+        letter: String.fromCharCode("a".charCodeAt(0) + Math.min(idx, 25)),
+      }));
+      return { ...g, ranges: rangesWithLetters };
+    });
+
+  return { video, nonVideo };
+}
+
+function Sources({ citations }) {
+  const model = useMemo(() => buildSourcesModel(citations), [citations]);
+  const hasAny = (model.video?.length || 0) + (model.nonVideo?.length || 0) > 0;
+  if (!hasAny) return null;
+
+  return (
+    <div className="mt-4 pt-4 border-t border-white/10 text-xs lg:text-sm text-gray-200/90">
+      <div className="font-semibold mb-2">Sources</div>
+
+      {!!model.video?.length && (
+        <div className="space-y-3">
+          {model.video.map((g) => (
+            <div key={g.contentId}>
+              <div className="font-semibold">
+                {g.leaderIndex}. {g.title} — <span className="text-gray-300">Video</span>
+              </div>
+              <ul className="mt-1 ml-5 list-disc space-y-1">
+                {g.ranges.map((r) => {
+                  const timeLabel =
+                    r.e !== r.s ? `${fmtTimestamp(r.s)}–${fmtTimestamp(r.e)}` : fmtTimestamp(r.s);
+                  return (
+                    <li key={`${g.contentId}:${r.s}-${r.e}`}>
+                      {/* Anchor(s) for scroll targets: one per original citation index */}
+                      {Array.isArray(r.citationIndices) &&
+                        r.citationIndices.map((i) => (
+                          <span key={i} id={`cm-src-${i}`} className="relative -top-20" />
+                        ))}
+                      <span className="font-semibold">{r.letter}.</span>{" "}
+                      {r.url ? (
+                        <a
+                          href={r.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
+                        >
+                          {timeLabel}
+                        </a>
+                      ) : (
+                        <span>{timeLabel}</span>
+                      )}
+                      {r.chapterTitle ? (
+                        <span className="text-gray-300"> — {r.chapterTitle}</span>
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!!model.nonVideo?.length && (
+        <div className={`space-y-1 ${model.video?.length ? "mt-4" : ""}`}>
+          {model.nonVideo.map(({ i, c }) => {
+            const extra = c?.extra || {};
+            const title = getCitationTitle(c);
+            const ps = extra?.pageStart ?? extra?.page_start ?? null;
+            const pe = extra?.pageEnd ?? extra?.page_end ?? null;
+            const pageLabel =
+              ps || pe
+                ? (() => {
+                    const a = Number(ps || pe);
+                    const b = Number(pe || ps);
+                    if (Number.isFinite(a) && Number.isFinite(b)) {
+                      return a === b ? ` (p.${a})` : ` (p.${a}–${b})`;
+                    }
+                    return "";
+                  })()
+                : "";
+            const url = typeof c?.url === "string" ? c.url : null;
+            return (
+              <div key={i} className="leading-relaxed">
+                <span id={`cm-src-${i}`} className="relative -top-20" />
+                <span className="font-semibold">{i}.</span> {title}
+                {pageLabel}
+                {url ? (
+                  <>
+                    {" "}
+                    —{" "}
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
+                    >
+                      Open source
+                    </a>
+                  </>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function CourseChat() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -265,68 +466,123 @@ export default function CourseChat() {
                           </p>
                         ) : (
                           <div className="text-sm lg:text-base leading-relaxed">
-                            <ReactMarkdown
-                              remarkPlugins={[remarkGfm]}
-                              components={{
-                                p: ({ children }) => (
-                                  <p className="my-2 whitespace-pre-wrap">{children}</p>
-                                ),
-                                strong: ({ children }) => (
-                                  <strong className="font-semibold">{children}</strong>
-                                ),
-                                em: ({ children }) => <em className="italic">{children}</em>,
-                                ul: ({ children }) => (
-                                  <ul className="my-2 ml-5 list-disc space-y-1">{children}</ul>
-                                ),
-                                ol: ({ children }) => (
-                                  <ol className="my-2 ml-5 list-decimal space-y-1">{children}</ol>
-                                ),
-                                li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-                                a: ({ children, href, title }) => {
-                                  const h = String(href || "");
-                                  const t = String(title || "");
-                                  // Hide footnote back-reference links (↩, ↩2, ...)
-                                  // so the Sources list stays clean.
-                                  if (h.includes("fnref") || h.includes("footnote-backref")) {
-                                    return null;
-                                  }
+                            <div>
+                              <ReactMarkdown
+                                remarkPlugins={[remarkGfm]}
+                                components={{
+                                  p: ({ children }) => (
+                                    <p className="my-2 whitespace-pre-wrap">{children}</p>
+                                  ),
+                                  strong: ({ children }) => (
+                                    <strong className="font-semibold">{children}</strong>
+                                  ),
+                                  em: ({ children }) => <em className="italic">{children}</em>,
+                                  ul: ({ children }) => (
+                                    <ul className="my-2 ml-5 list-disc space-y-1">{children}</ul>
+                                  ),
+                                  ol: ({ children }) => (
+                                    <ol className="my-2 ml-5 list-decimal space-y-1">{children}</ol>
+                                  ),
+                                  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+                                  a: ({ children, href, title }) => {
+                                    const h = String(href || "");
+                                    const t = String(title || "");
+                                    // Hide footnote back-reference links (↩, ↩2, ...)
+                                    // so the Sources list stays clean.
+                                    if (h.includes("fnref") || h.includes("footnote-backref")) {
+                                      return null;
+                                    }
 
-                                  const isHashLink = h.startsWith("#");
-                                  const isFootnoteRef = h.includes("fn-") || h.includes("footnote");
+                                    const isHashLink = h.startsWith("#");
+                                    const isFootnoteRef = h.includes("fn-") || h.includes("footnote");
+                                    const isCmSourceRef = h.startsWith("#cm-src-");
 
-                                  // Footnote refs should jump within the page (no new tab)
-                                  // and look like footnote markers.
-                                  if (isHashLink && isFootnoteRef) {
-                                    return (
-                                      <sup className="ml-0.5">
+                                    // Our structured Sources scroll links: keep them inline and clickable.
+                                    if (isCmSourceRef) {
+                                      return (
                                         <a
                                           href={h}
-                                          className="text-purple-300 hover:text-purple-200 no-underline"
+                                          className="ml-0.5 align-super text-[0.75em] text-purple-300 hover:text-purple-200 no-underline"
+                                          onClick={(e) => {
+                                            e.preventDefault();
+                                            const id = h.slice(1);
+                                            const el = document.getElementById(id);
+                                            if (el) {
+                                              el.scrollIntoView({ behavior: "smooth", block: "center" });
+                                            }
+                                          }}
                                         >
                                           {children}
                                         </a>
-                                      </sup>
-                                    );
-                                  }
+                                      );
+                                    }
 
-                                  // Regular in-page links should not open a new tab.
-                                  if (isHashLink) {
-                                    return (
-                                      <a
-                                        href={h}
-                                        className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
-                                      >
-                                        {children}
-                                      </a>
-                                    );
-                                  }
+                                    // Footnote refs should jump within the page (no new tab)
+                                    // and look like footnote markers.
+                                    if (isHashLink && isFootnoteRef) {
+                                      return (
+                                        <sup className="ml-0.5">
+                                          <a
+                                            href={h}
+                                            className="text-purple-300 hover:text-purple-200 no-underline"
+                                          >
+                                            {children}
+                                          </a>
+                                        </sup>
+                                      );
+                                    }
 
-                                  const isVideoHint = t.toLowerCase().startsWith("video:");
-                                  const videoTitle = isVideoHint ? t.slice("video:".length).trim() : null;
-                                  const looksLikeVideo = /\.(mp4|mov|webm|m4v)(\?|$)/i.test(h);
+                                    // Regular in-page links should not open a new tab.
+                                    if (isHashLink) {
+                                      return (
+                                        <a
+                                          href={h}
+                                          className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
+                                        >
+                                          {children}
+                                        </a>
+                                      );
+                                    }
 
-                                  // Video transcript citations: open the in-app VideoPlayer in a new tab.
-                                  if (isVideoHint) {
+                                    const isVideoHint = t.toLowerCase().startsWith("video:");
+                                    const videoTitle = isVideoHint ? t.slice("video:".length).trim() : null;
+                                    const looksLikeVideo = /\.(mp4|mov|webm|m4v)(\?|$)/i.test(h);
+
+                                    // Video transcript citations: open the in-app VideoPlayer in a new tab.
+                                    if (isVideoHint) {
+                                      return (
+                                        <a
+                                          href={h}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
+                                        >
+                                          {children}
+                                        </a>
+                                      );
+                                    }
+
+                                    // Raw video links (older behavior): keep modal playback.
+                                    if (looksLikeVideo) {
+                                      return (
+                                        <a
+                                          href={h}
+                                          className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
+                                          onClick={(e) => {
+                                            e.preventDefault();
+                                            setVideoPlayer({
+                                              open: true,
+                                              url: h,
+                                              title: videoTitle || "Video",
+                                            });
+                                          }}
+                                        >
+                                          {children}
+                                        </a>
+                                      );
+                                    }
+
+                                    // External links: keep existing behavior.
                                     return (
                                       <a
                                         href={h}
@@ -337,80 +593,49 @@ export default function CourseChat() {
                                         {children}
                                       </a>
                                     );
-                                  }
-
-                                  // Raw video links (older behavior): keep modal playback.
-                                  if (looksLikeVideo) {
+                                  },
+                                  blockquote: ({ children }) => (
+                                    <blockquote className="my-3 border-l-2 border-white/15 pl-4 text-gray-200/90">
+                                      {children}
+                                    </blockquote>
+                                  ),
+                                  code: ({ className, children }) => {
+                                    const isBlock = String(className || "").includes("language-");
+                                    if (isBlock) {
+                                      // The enclosing <pre> is handled below.
+                                      return <code className={className}>{children}</code>;
+                                    }
                                     return (
-                                      <a
-                                        href={h}
-                                        className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
-                                        onClick={(e) => {
-                                          e.preventDefault();
-                                          setVideoPlayer({
-                                            open: true,
-                                            url: h,
-                                            title: videoTitle || "Video",
-                                          });
-                                        }}
-                                      >
+                                      <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.95em]">
                                         {children}
-                                      </a>
+                                      </code>
                                     );
-                                  }
-
-                                  // External links: keep existing behavior.
-                                  return (
-                                    <a
-                                      href={h}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
-                                    >
+                                  },
+                                  pre: ({ children }) => (
+                                    <pre className="my-3 overflow-x-auto rounded-xl bg-black/40 p-4 text-sm">
                                       {children}
-                                    </a>
-                                  );
-                                },
-                                blockquote: ({ children }) => (
-                                  <blockquote className="my-3 border-l-2 border-white/15 pl-4 text-gray-200/90">
-                                    {children}
-                                  </blockquote>
-                                ),
-                                code: ({ className, children }) => {
-                                  const isBlock = String(className || "").includes("language-");
-                                  if (isBlock) {
-                                    // The enclosing <pre> is handled below.
-                                    return <code className={className}>{children}</code>;
-                                  }
-                                  return (
-                                    <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.95em]">
-                                      {children}
-                                    </code>
-                                  );
-                                },
-                                pre: ({ children }) => (
-                                  <pre className="my-3 overflow-x-auto rounded-xl bg-black/40 p-4 text-sm">
-                                    {children}
-                                  </pre>
-                                ),
-                                h1: ({ children }) => (
-                                  <h1 className="mt-4 mb-2 text-lg font-semibold">{children}</h1>
-                                ),
-                                h2: ({ children, id }) => {
-                                  // remark-gfm footnotes section header uses id="footnote-label"
-                                  if (String(id || "") === "footnote-label") {
-                                    return <div className="mt-4 mb-2 font-semibold">Sources</div>;
-                                  }
-                                  return <h2 className="mt-4 mb-2 text-base font-semibold">{children}</h2>;
-                                },
-                                h3: ({ children }) => (
-                                  <h3 className="mt-3 mb-2 text-sm font-semibold">{children}</h3>
-                                ),
-                                hr: () => <hr className="my-4 border-white/10" />,
-                              }}
-                            >
-                              {String(msg.content ?? "")}
-                            </ReactMarkdown>
+                                    </pre>
+                                  ),
+                                  h1: ({ children }) => (
+                                    <h1 className="mt-4 mb-2 text-lg font-semibold">{children}</h1>
+                                  ),
+                                  h2: ({ children, id }) => {
+                                    // remark-gfm footnotes section header uses id="footnote-label"
+                                    if (String(id || "") === "footnote-label") {
+                                      return <div className="mt-4 mb-2 font-semibold">Sources</div>;
+                                    }
+                                    return <h2 className="mt-4 mb-2 text-base font-semibold">{children}</h2>;
+                                  },
+                                  h3: ({ children }) => (
+                                    <h3 className="mt-3 mb-2 text-sm font-semibold">{children}</h3>
+                                  ),
+                                  hr: () => <hr className="my-4 border-white/10" />,
+                                }}
+                              >
+                                {String(msg.content ?? "")}
+                              </ReactMarkdown>
+                            </div>
+                            <Sources citations={msg.citations} />
                           </div>
                         )}
                       </div>

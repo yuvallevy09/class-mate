@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.chat import ChatCitation
+
 
 class ChatConversationPublic(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -23,6 +25,7 @@ class ChatMessagePublic(BaseModel):
     conversation_id: UUID
     role: str
     content: str
+    citations: list[ChatCitation] | None = None
     created_at: datetime
 
 

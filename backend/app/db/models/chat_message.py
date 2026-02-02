@@ -4,6 +4,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -25,6 +26,10 @@ class ChatMessage(Base):
     role: Mapped[str] = mapped_column(String(32), nullable=False)
 
     content: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Optional structured citations payload for assistant messages.
+    # Stored as JSONB to keep chat history stable without embedding citations into markdown.
+    citations: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
