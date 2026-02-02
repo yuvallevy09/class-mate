@@ -15,6 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { toast } from "@/components/ui/use-toast";
 import Navbar from "@/components/Navbar";
 import CourseSidebar from "@/components/CourseSidebar";
 
@@ -110,6 +111,17 @@ export default function CourseContent() {
   const createContentMutation = useMutation({
     mutationFn: async (contentData) => {
       if (contentData.file) {
+        // Client-side max size guard (matches the UI hint).
+        if (isVideosPage) {
+          const maxBytes = Math.max(0, videoUploadMaxSizeMb) * 1024 * 1024;
+          const sizeBytes = Number(contentData.file.size || 0);
+          if (maxBytes > 0 && sizeBytes > maxBytes) {
+            throw new Error(
+              `Video is too large (${Math.ceil(sizeBytes / (1024 * 1024))}MB). Max allowed is ${videoUploadMaxSizeMb}MB.`
+            );
+          }
+        }
+
         setIsUploading(true);
         const presign = await presignUpload({ courseId, file: contentData.file });
         const putRes = await fetch(presign.uploadUrl, {
@@ -126,38 +138,33 @@ export default function CourseContent() {
 
         const mt = (contentData.file.type || "").toLowerCase();
         if (mt.startsWith("video/")) {
-          try {
-            const res = await finalizeVideoUpload(courseId, {
-              title: contentData.title,
-              description: contentData.description,
-              source_file_key: presign.key,
-              original_filename: contentData.file.name,
-              mime_type: contentData.file.type || "application/octet-stream",
-              size_bytes: contentData.file.size ?? null,
-              kickoffTranscription: false,
-            });
-            const videoAsset = res?.videoAsset;
-            // Fire-and-forget UX: if transcription fails, the asset will be marked "error" and can be retried later.
-            if (videoAsset?.id) {
-              transcribeVideoAsset(videoAsset.id, { force: false }).catch((e) => {
-                console.error("Video transcription kickoff failed:", e);
-                setKickoffNotice({
-                  type: "error",
-                  message:
-                    "Upload succeeded, but transcription didn’t start. Please check your config, or click Retry on the video card.",
-                });
-                window.setTimeout(() => setKickoffNotice(null), 8000);
-              });
-            }
-          } catch (e) {
+          // This step is REQUIRED. If it fails, we should not pretend the upload "worked"
+          // since the app won't be able to list/play the new video.
+          const res = await finalizeVideoUpload(courseId, {
+            title: contentData.title,
+            description: contentData.description,
+            source_file_key: presign.key,
+            original_filename: contentData.file.name,
+            mime_type: contentData.file.type || "application/octet-stream",
+            size_bytes: contentData.file.size ?? null,
+            kickoffTranscription: false,
+          });
+
+          const videoAsset = res?.videoAsset;
+          if (!videoAsset?.id) {
+            throw new Error("Upload succeeded, but the server did not return a video asset id.");
+          }
+
+          // Fire-and-forget UX: if transcription fails, the asset will be marked "error" and can be retried later.
+          transcribeVideoAsset(videoAsset.id, { force: false }).catch((e) => {
             console.error("Video transcription kickoff failed:", e);
             setKickoffNotice({
               type: "error",
               message:
-                "Upload succeeded, but we couldn’t register the video for transcription. Please refresh and try again.",
+                "Upload succeeded, but transcription didn’t start. Please check your config, or click Retry on the video card.",
             });
             window.setTimeout(() => setKickoffNotice(null), 8000);
-          }
+          });
           return;
         }
 
@@ -181,12 +188,24 @@ export default function CourseContent() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['content', courseId, category] });
+      // If we're on Videos, refresh transcription/indexing status promptly.
+      if (isVideosPage) {
+        queryClient.invalidateQueries({ queryKey: ['videoAssets', courseId] });
+      }
       setIsAddDialogOpen(false);
       setNewContent({ title: "", description: "", file: null });
       setIsUploading(false);
     },
-    onError: () => {
+    onError: (err) => {
       setIsUploading(false);
+      const detail =
+        (typeof err?.data?.detail === "string" && err.data.detail) ||
+        (typeof err?.message === "string" && err.message) ||
+        "Something went wrong. Please try again.";
+      toast({
+        title: isVideosPage ? "Couldn’t add video" : "Couldn’t add content",
+        description: detail,
+      });
     }
   });
 
