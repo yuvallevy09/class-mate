@@ -34,6 +34,7 @@ class ChatEngine:
             "- Stay scoped to the course context provided.\n"
             "- If you lack course materials to answer confidently, ask a clarifying question or suggest what to upload.\n"
             "- Do not fabricate citations. If you reference course materials, describe what you'd need to cite.\n"
+            "- Format your responses in Markdown. Use headings and bullet lists where helpful.\n"
             "\n"
             f"Course name: {course_name}\n"
             f"Course description: {desc if desc else '(none)'}\n"

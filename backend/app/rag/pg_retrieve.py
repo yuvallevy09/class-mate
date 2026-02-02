@@ -53,6 +53,7 @@ async def retrieve_course_chunk_hits(
     for chunk, score in res.all():
         meta = dict(chunk.meta or {})
         # Normalize a few common fields so the citation layer has what it needs.
+        meta.setdefault("chunk_id", str(chunk.id))
         meta.setdefault("content_id", str(chunk.content_id))
         meta.setdefault("course_id", str(chunk.course_id))
         meta.setdefault("category", str(chunk.category))

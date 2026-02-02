@@ -6,8 +6,6 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID
 
-import boto3
-from botocore.config import Config
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
@@ -63,17 +61,6 @@ class VideoChatResponse(BaseModel):
     text: str
 
 
-def _s3_client(settings: Settings):
-    kwargs: dict = {"service_name": "s3", "region_name": settings.s3_region}
-    if settings.s3_endpoint_url:
-        kwargs["endpoint_url"] = settings.s3_endpoint_url
-        kwargs["config"] = Config(s3={"addressing_style": "path"})
-    if settings.s3_access_key_id and settings.s3_secret_access_key:
-        kwargs["aws_access_key_id"] = settings.s3_access_key_id
-        kwargs["aws_secret_access_key"] = settings.s3_secret_access_key
-    return boto3.client(**kwargs)
-
-
 async def _attach_citation_urls(
     *,
     db: AsyncSession,
@@ -81,8 +68,28 @@ async def _attach_citation_urls(
     course_id: UUID,
     citations: list[ChatCitation],
 ) -> list[ChatCitation]:
-    """Best-effort: attach presigned download URLs for citations (when possible)."""
-    if not citations or not settings.s3_bucket:
+    """Best-effort: attach URLs for citations (when possible).
+
+    - For video transcript citations, prefer a stable in-app VideoPlayer URL (no S3 required).
+    - For file-backed citations, prefer a stable in-app API link that redirects to a fresh presigned URL.
+    """
+    if not citations:
+        return citations
+
+    # Video citations: link to the in-app VideoPlayer page at the relevant timestamp.
+    # This is stable across sessions and avoids leaking raw presigned URLs into chat history.
+    for c in citations:
+        extra = c.extra or {}
+        if extra.get("type") == "video" and c.content_id and not c.url:
+            try:
+                start = float(extra.get("startSec") or 0.0)
+            except Exception:
+                start = 0.0
+            # Use an integer second for URL cleanliness.
+            t = int(start) if start >= 0 else 0
+            c.url = f"/VideoPlayer?courseId={course_id}&contentId={c.content_id}&t={t}"
+
+    if not settings.s3_bucket:
         return citations
 
     content_ids: list[UUID] = []
@@ -99,24 +106,16 @@ async def _attach_citation_urls(
             CourseContent.file_key.is_not(None),
         )
     )
-    file_key_by_id: dict[UUID, str] = {cid: str(key) for (cid, key) in res.all() if key}
-    if not file_key_by_id:
+    has_file_by_id: set[UUID] = {cid for (cid, key) in res.all() if cid and key}
+    if not has_file_by_id:
         return citations
 
-    s3 = _s3_client(settings)
     for c in citations:
         if c.content_id and not c.url:
-            fk = file_key_by_id.get(c.content_id)
-            if not fk:
+            if c.content_id not in has_file_by_id:
                 continue
-            try:
-                c.url = s3.generate_presigned_url(
-                    ClientMethod="get_object",
-                    Params={"Bucket": settings.s3_bucket, "Key": fk},
-                    ExpiresIn=int(settings.s3_download_expires_seconds),
-                )
-            except Exception:
-                pass
+            # Stable link: API endpoint will redirect to a fresh presigned URL on click.
+            c.url = f"/api/v1/contents/{c.content_id}/download-redirect"
     return citations
 
 
@@ -134,12 +133,114 @@ def _format_reply_with_sources(reply: str, citations: list[ChatCitation]) -> str
 
     n = len(citations)
 
+    # Video citations UX:
+    # - The footnote number represents the video (we use the first citation index for that video).
+    # - A letter represents the time range (a, b, c...) and is shown as a superscript character
+    #   adjacent to the footnote marker in the answer.
+    # - The footnote definition for the video contains a grouped list of ranges with links that
+    #   open the in-app VideoPlayer (frontend opens in a new tab based on title="video:...").
+    #
+    # This keeps the main answer clean and makes sources more navigable.
+    _SUPERSCRIPT_LETTERS = [
+        "ᵃ",  # a
+        "ᵇ",  # b
+        "ᶜ",  # c
+        "ᵈ",  # d
+        "ᵉ",  # e
+        "ᶠ",  # f
+        "ᵍ",  # g
+        "ʰ",  # h
+        "ⁱ",  # i
+        "ʲ",  # j
+        "ᵏ",  # k
+        "ˡ",  # l
+        "ᵐ",  # m
+        "ⁿ",  # n
+        "ᵒ",  # o
+        "ᵖ",  # p
+        "ʳ",  # r
+        "ˢ",  # s
+        "ᵗ",  # t
+        "ᵘ",  # u
+        "ᵛ",  # v
+        "ʷ",  # w
+        "ˣ",  # x
+        "ʸ",  # y
+        "ᶻ",  # z
+    ]
+
+    # Group video citations by content_id; "number" is the first citation index where it appears.
+    video_group_first_index: dict[str, int] = {}
+    video_group_items: dict[str, list[tuple[int, float, float, str | None, str | None]]] = {}
+    # key -> list of (original_citation_index, start_sec, end_sec, url, title_for_link)
+
+    for i, c in enumerate(citations, start=1):
+        extra = c.extra or {}
+        if extra.get("type") != "video" or not c.content_id:
+            continue
+        key = str(c.content_id)
+        video_group_first_index[key] = min(video_group_first_index.get(key, i), i)
+        try:
+            start = float(extra.get("startSec") or 0.0)
+        except Exception:
+            start = 0.0
+        try:
+            end = float(extra.get("endSec") or 0.0)
+        except Exception:
+            end = start
+        url = str(c.url) if c.url else None
+        title = str((c.title or extra.get("chapterTitle") or extra.get("original_filename") or "Video")).strip()
+        video_group_items.setdefault(key, []).append((i, start, end, url, title))
+
+    # For each video group, allocate letters by distinct (start,end) ranges in order of appearance.
+    video_citation_to_letter: dict[int, str] = {}
+    video_group_ranges: dict[str, list[tuple[str, float, float, str | None]]] = {}
+    # key -> list of (letter, start, end, url)
+    for key, items in video_group_items.items():
+        seen_ranges: dict[tuple[int, int], str] = {}
+        ranges_out: list[tuple[str, float, float, str | None]] = []
+        letter_idx = 0
+        for (orig_i, start, end, url, _title) in items:
+            # Normalize to integer seconds for grouping.
+            s_int = int(start) if start >= 0 else 0
+            e_int = int(end) if end >= 0 else s_int
+            rng_key = (s_int, e_int)
+            letter = seen_ranges.get(rng_key)
+            if not letter:
+                base = chr(ord("a") + min(letter_idx, 25))
+                letter = base
+                seen_ranges[rng_key] = letter
+                letter_idx += 1
+                ranges_out.append((letter, float(s_int), float(e_int), url))
+            video_citation_to_letter[orig_i] = letter
+        video_group_ranges[key] = ranges_out
+
+    def _sup_letter(letter: str) -> str:
+        if not letter:
+            return ""
+        idx = ord(letter.lower()) - ord("a")
+        if 0 <= idx < len(_SUPERSCRIPT_LETTERS):
+            return _SUPERSCRIPT_LETTERS[idx]
+        return letter
+
     def repl(m: re.Match) -> str:
         try:
             i = int(m.group(1))
         except Exception:
             return m.group(0)
-        return f"[^{i}]" if 1 <= i <= n else m.group(0)
+        if not (1 <= i <= n):
+            return m.group(0)
+
+        c = citations[i - 1]
+        extra = c.extra or {}
+        if extra.get("type") == "video" and c.content_id:
+            key = str(c.content_id)
+            video_no = video_group_first_index.get(key, i)
+            letter = video_citation_to_letter.get(i, "")
+            # Make the entire "1ᵃ" clickable and scroll to Sources.
+            # CourseChat renders footnote-ish hash links as <sup><a/></sup>.
+            return f"[{video_no}{_sup_letter(letter)}](#user-content-fn-{video_no})"
+        return f"[^{i}]"
 
     text = _CITATION_RE.sub(repl, text)
 
@@ -152,16 +253,34 @@ def _format_reply_with_sources(reply: str, citations: list[ChatCitation]) -> str
         title = (c.title or "").strip()
         label = (title or original or (str(c.content_id) if c.content_id else "Course content")).strip()
 
-        if extra.get("type") == "video":
-            # Let the frontend detect "Open source" as a video link and open an in-app player.
-            # Put the display title in the link title attribute (markdown: (url "title")).
-            video_title = (title or original or "Video").strip().replace('"', "").replace("\n", " ")
-            try:
-                s = float(extra.get("startSec") or 0.0)
-                e = float(extra.get("endSec") or 0.0)
-                label = f"{label} (video {s:.0f}s–{e:.0f}s)"
-            except Exception:
-                label = f"{label} (video)"
+        if extra.get("type") == "video" and c.content_id:
+            # Only emit ONE footnote definition per video (the first citation index for that video).
+            key = str(c.content_id)
+            leader = video_group_first_index.get(key, i)
+            if leader != i:
+                continue
+
+            video_title = (title or original or "Lecture Video").strip().replace('"', "").replace("\n", " ")
+            header = f"**{video_title}**"
+
+            # Build lettered ranges list.
+            ranges = video_group_ranges.get(key, [])
+            bullets: list[str] = []
+            for (letter, s, e, url) in ranges:
+                rng_label = f"{_fmt_timestamp(s)}–{_fmt_timestamp(e)}" if e != s else f"{_fmt_timestamp(s)}"
+                if url:
+                    # Ensure frontend recognizes as VideoPlayer link and opens a new tab (via title attr).
+                    bullets.append(f'* **{letter}.** [{rng_label}]({url} "video:{video_title}")')
+                else:
+                    bullets.append(f"* **{letter}.** {rng_label}")
+
+            # Markdown footnote multiline format: continuation lines must be indented.
+            lines.append(f"[^{leader}]: {header}")
+            if bullets:
+                lines.append("    ")
+                for b in bullets:
+                    lines.append(f"    {b}")
+            continue
         elif extra.get("pageStart") or extra.get("pageEnd"):
             try:
                 ps = int(extra.get("pageStart") or extra.get("pageEnd") or 0)
@@ -173,10 +292,7 @@ def _format_reply_with_sources(reply: str, citations: list[ChatCitation]) -> str
 
         if c.url:
             # Single link only (UI hides the autogenerated backrefs).
-            if extra.get("type") == "video":
-                lines.append(f'[^{i}]: {label} — [Open source]({c.url} "video:{video_title}")')
-            else:
-                lines.append(f"[^{i}]: {label} — [Open source]({c.url})")
+            lines.append(f"[^{i}]: {label} — [Open source]({c.url})")
         else:
             lines.append(f"[^{i}]: {label}")
 
@@ -469,7 +585,14 @@ async def course_chat(
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="LLM request failed") from e
+        # Persist a visible assistant error message so the conversation doesn't look "stuck".
+        # This also ensures the user message is not lost from chat history.
+        logger.warning("LLM request failed (persisting error reply): %s", str(e))
+        reply = (
+            "I couldn’t reach the language model right now. "
+            "Please retry in a moment—if this keeps happening, check your API key/quota and server logs."
+        )
+        citations = []
 
     # Best-effort: attach presigned URLs to citations, then append a Sources section to the reply
     # so citations are readable and persistent in chat history.

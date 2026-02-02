@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Any, Iterable, Sequence
 from uuid import UUID
 
@@ -12,6 +13,21 @@ from app.rag.embeddings import get_embeddings
 from app.rag.embedding_config import EMBEDDING_DIMS
 from app.rag.pg_retrieve import retrieve_course_chunk_hits
 from app.rag.types import RagHit
+
+logger = logging.getLogger(__name__)
+_SEMANTIC_LOG_ONCE_KEYS: set[str] = set()
+
+
+def _log_semantic_once(key: str, level: str, msg: str, *args) -> None:
+    """
+    Log a semantic-retrieval diagnostic only once per-process per key to avoid noise.
+    Keys should include course_id + reason.
+    """
+    if key in _SEMANTIC_LOG_ONCE_KEYS:
+        return
+    _SEMANTIC_LOG_ONCE_KEYS.add(key)
+    fn = getattr(logger, level, logger.info)
+    fn(msg, *args)
 
 
 @dataclass(frozen=True)
@@ -84,11 +100,36 @@ async def _semantic_top_k(
         {"course_id": str(course_id)},
     )
     if exists_res.first() is None:
+        _log_semantic_once(
+            f"{course_id}:no_embeddings",
+            "debug",
+            "Semantic retrieval disabled: no stored embeddings for course_id=%s",
+            str(course_id),
+        )
         return []
 
-    emb = get_embeddings(settings)
+    try:
+        emb = get_embeddings(settings)
+    except ValueError as e:
+        _log_semantic_once(
+            f"{course_id}:embeddings_unavailable:{type(e).__name__}",
+            "info",
+            "Semantic retrieval disabled: embeddings provider unavailable (%s) course_id=%s",
+            str(e),
+            str(course_id),
+        )
+        return []
+
     qvec = emb.embed_query((query or "").strip())
     if not isinstance(qvec, list) or len(qvec) != EMBEDDING_DIMS:
+        _log_semantic_once(
+            f"{course_id}:dim_mismatch",
+            "warning",
+            "Semantic retrieval disabled: embedding dim mismatch course_id=%s expected=%s got=%s",
+            str(course_id),
+            str(EMBEDDING_DIMS),
+            str(len(qvec) if isinstance(qvec, list) else "non-list"),
+        )
         return []
 
     qlit = _vector_literal(qvec)
@@ -170,7 +211,14 @@ async def retrieve_course_hybrid_hits(
         semantic = await _semantic_top_k(
             db=db, course_id=course_id, query=q, top_k=int(cfg.semantic_k), categories=cats
         )
-    except Exception:
+    except Exception as e:
+        _log_semantic_once(
+            f"{course_id}:semantic_exception:{type(e).__name__}",
+            "warning",
+            "Semantic retrieval failed (best-effort): %s course_id=%s",
+            str(e),
+            str(course_id),
+        )
         semantic = []
 
     # If semantic is unavailable, keep existing behavior (BM25 only).

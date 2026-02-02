@@ -7,6 +7,7 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -212,5 +213,47 @@ async def get_download_url(
         ExpiresIn=int(settings.s3_download_expires_seconds),
     )
     return DownloadUrlResponse(url=url)
+
+
+@router.get("/contents/{content_id}/download-redirect")
+async def download_redirect(
+    content_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+) -> RedirectResponse:
+    """
+    Stable download endpoint for use in links (e.g., chat citations).
+
+    Returns an HTTP redirect to a short-lived presigned S3 URL so persisted links
+    don't rot when a presign expires.
+    """
+    if not settings.s3_bucket:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="S3 is not configured (missing S3_BUCKET)",
+        )
+
+    res = await db.execute(
+        select(CourseContent, Course)
+        .join(Course, Course.id == CourseContent.course_id)
+        .where(CourseContent.id == content_id, Course.user_id == current_user.id)
+    )
+    row = res.first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content not found")
+
+    content: CourseContent = row[0]
+    if not content.file_key:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No file for this content")
+
+    s3 = _s3_client(settings)
+    url = s3.generate_presigned_url(
+        ClientMethod="get_object",
+        Params={"Bucket": settings.s3_bucket, "Key": content.file_key},
+        ExpiresIn=int(settings.s3_download_expires_seconds),
+    )
+    # 307 preserves method (GET) and is safe for browsers.
+    return RedirectResponse(url=url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
 

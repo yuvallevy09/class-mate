@@ -118,6 +118,10 @@ export default function VideoPlayer() {
       contentId: urlParams.get("contentId"),
     };
   }, [location.search]);
+  const tParam = useMemo(() => {
+    const urlParams = new URLSearchParams(location.search);
+    return urlParams.get("t");
+  }, [location.search]);
 
   const [message, setMessage] = useState("");
   const [isTyping, setIsTyping] = useState(false);
@@ -133,6 +137,7 @@ export default function VideoPlayer() {
   const textareaRef = useRef(null);
   const videoRef = useRef(null);
   const chatWasOpenRef = useRef(false);
+  const initialSeekDoneRef = useRef(false);
 
   const noteStorageKey = useMemo(() => {
     if (!courseId || !contentId) return null;
@@ -265,6 +270,35 @@ export default function VideoPlayer() {
     // Let the scroll start, then seek/play (matches the transcript UX feel).
     window.setTimeout(() => seekToSeconds(seconds), 80);
   };
+
+  // If navigated with ?t=SECONDS, seek on first load.
+  useEffect(() => {
+    if (initialSeekDoneRef.current) return;
+    if (!tParam) return;
+    const el = videoRef.current;
+    if (!el) return;
+
+    let target = Number(tParam);
+    if (!Number.isFinite(target)) {
+      // Allow mm:ss too.
+      const parsed = parseTimestampToSeconds(tParam);
+      target = typeof parsed === "number" ? parsed : 0;
+    }
+    target = Math.max(0, target);
+
+    const doSeek = () => {
+      if (initialSeekDoneRef.current) return;
+      initialSeekDoneRef.current = true;
+      seekToSeconds(target);
+    };
+
+    if (el.readyState >= 1) {
+      doSeek();
+      return;
+    }
+    el.addEventListener("loadedmetadata", doSeek, { once: true });
+    return () => el.removeEventListener("loadedmetadata", doSeek);
+  }, [tParam, videoUrl]);
 
   const aiSummaryText = String(videoSummary?.aiSummary || "").trim();
   const aiSummaryMarkdown = useMemo(() => linkifySummaryTimestamps(aiSummaryText), [aiSummaryText]);

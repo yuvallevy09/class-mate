@@ -324,9 +324,23 @@ export default function CourseChat() {
                                   const isVideoHint = t.toLowerCase().startsWith("video:");
                                   const videoTitle = isVideoHint ? t.slice("video:".length).trim() : null;
                                   const looksLikeVideo = /\.(mp4|mov|webm|m4v)(\?|$)/i.test(h);
-                                  const shouldOpenVideoModal = isVideoHint || looksLikeVideo;
 
-                                  if (shouldOpenVideoModal) {
+                                  // Video transcript citations: open the in-app VideoPlayer in a new tab.
+                                  if (isVideoHint) {
+                                    return (
+                                      <a
+                                        href={h}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
+                                      >
+                                        {children}
+                                      </a>
+                                    );
+                                  }
+
+                                  // Raw video links (older behavior): keep modal playback.
+                                  if (looksLikeVideo) {
                                     return (
                                       <a
                                         href={h}
