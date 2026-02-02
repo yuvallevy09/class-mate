@@ -12,6 +12,7 @@ import {
   Edit3,
   Send,
   Loader2,
+  Maximize2,
 } from "lucide-react";
 
 import { createPageUrl } from "@/utils";
@@ -24,6 +25,7 @@ import CourseSidebar from "@/components/CourseSidebar";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "@/components/ui/use-toast";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import RichTextEditor from "@/components/RichTextEditor";
 
 function fmtTimestamp(seconds) {
@@ -122,12 +124,14 @@ export default function VideoPlayer() {
   const [noteDoc, setNoteDoc] = useState(null);
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(true);
   const [isChatOpen, setIsChatOpen] = useState(true);
+  const [isChatPopoutOpen, setIsChatPopoutOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSummaryExpanded, setIsSummaryExpanded] = useState(true);
 
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
   const videoRef = useRef(null);
+  const chatWasOpenRef = useRef(false);
 
   const noteStorageKey = useMemo(() => {
     if (!courseId || !contentId) return null;
@@ -305,9 +309,112 @@ export default function VideoPlayer() {
     }
   };
 
+  const openChatPopout = () => {
+    chatWasOpenRef.current = !!isChatOpen;
+    setIsChatPopoutOpen(true);
+    setIsChatOpen(false);
+  };
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, isTyping]);
+
+  const renderChatPanel = ({ scrollHeightClass }) => (
+    <motion.div
+      initial={{ height: 0, opacity: 0 }}
+      animate={{ height: "auto", opacity: 1 }}
+      exit={{ height: 0, opacity: 0 }}
+      className="flex flex-col glass-card rounded-2xl overflow-hidden"
+    >
+      <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-2">
+          <MessageSquare className="w-5 h-5 text-purple-400" />
+          <h2 className="text-lg font-semibold">Chat</h2>
+        </div>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={openChatPopout}
+            className="text-gray-400 hover:text-white hover:bg-white/5"
+            aria-label="Pop out chat"
+          >
+            <Maximize2 className="w-5 h-5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setIsChatOpen(false)}
+            className="text-gray-400 hover:text-white hover:bg-white/5"
+            aria-label="Close chat"
+          >
+            <X className="w-5 h-5" />
+          </Button>
+        </div>
+      </div>
+
+      <ScrollArea className={`${scrollHeightClass} px-4 py-4`}>
+        <div className="space-y-4">
+          {messages.length === 0 && !isTyping && (
+            <div className="text-center py-8">
+              <Sparkles className="w-10 h-10 text-purple-400 mx-auto mb-2" />
+              <p className="text-gray-400 text-sm">Ask questions about the lecture</p>
+            </div>
+          )}
+          {messages.map((msg, index) => (
+            <motion.div
+              key={`${msg.role}-${index}`}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+            >
+              <div className="max-w-[85%]">
+                <div
+                  className={`rounded-2xl px-4 py-2 ${
+                    msg.role === "user"
+                      ? "bg-gradient-to-r from-pink-500 via-purple-500 to-blue-500 text-white"
+                      : "glass-card text-gray-100"
+                  }`}
+                >
+                  <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                </div>
+              </div>
+            </motion.div>
+          ))}
+          {isTyping && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex justify-start">
+              <div className="glass-card rounded-2xl px-4 py-2">
+                <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
+              </div>
+            </motion.div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+      </ScrollArea>
+
+      <div className="p-4 border-t border-white/5 shrink-0">
+        <div className="glass-card rounded-xl p-2 flex items-end gap-2">
+          <textarea
+            ref={textareaRef}
+            placeholder="Ask a question..."
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={!courseId || isTyping}
+            className="flex-1 bg-transparent border-0 text-white placeholder:text-gray-500 resize-none min-h-[44px] max-h-[120px] outline-none ring-0 focus:outline-none focus:ring-0 focus:bg-transparent focus-visible:outline-none focus-visible:ring-0 focus-visible:bg-transparent"
+            rows={1}
+          />
+          <Button
+            onClick={handleSend}
+            disabled={!String(message || "").trim() || isTyping}
+            className="btn-gradient rounded-xl h-10 w-10 p-0 shrink-0"
+          >
+            <Send className="w-4 h-4" />
+          </Button>
+        </div>
+      </div>
+    </motion.div>
+  );
 
   return (
     <div className="min-h-screen flex flex-col relative overflow-hidden">
@@ -458,92 +565,7 @@ export default function VideoPlayer() {
                 {/* Chat */}
                 <AnimatePresence>
                   {isChatOpen && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: "auto", opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      className="flex flex-col glass-card rounded-2xl overflow-hidden"
-                    >
-                      <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0">
-                        <div className="flex items-center gap-2">
-                          <MessageSquare className="w-5 h-5 text-purple-400" />
-                          <h2 className="text-lg font-semibold">Chat</h2>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => setIsChatOpen(false)}
-                          className="text-gray-400 hover:text-white hover:bg-white/5"
-                        >
-                          <X className="w-5 h-5" />
-                        </Button>
-                      </div>
-
-                      <ScrollArea className="h-[300px] px-4 py-4">
-                        <div className="space-y-4">
-                          {messages.length === 0 && !isTyping && (
-                            <div className="text-center py-8">
-                              <Sparkles className="w-10 h-10 text-purple-400 mx-auto mb-2" />
-                              <p className="text-gray-400 text-sm">Ask questions about the lecture</p>
-                            </div>
-                          )}
-                          {messages.map((msg, index) => (
-                            <motion.div
-                              key={`${msg.role}-${index}`}
-                              initial={{ opacity: 0, y: 10 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-                            >
-                              <div className="max-w-[85%]">
-                                <div
-                                  className={`rounded-2xl px-4 py-2 ${
-                                    msg.role === "user"
-                                      ? "bg-gradient-to-r from-pink-500 via-purple-500 to-blue-500 text-white"
-                                      : "glass-card text-gray-100"
-                                  }`}
-                                >
-                                  <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                                </div>
-                              </div>
-                            </motion.div>
-                          ))}
-                          {isTyping && (
-                            <motion.div
-                              initial={{ opacity: 0 }}
-                              animate={{ opacity: 1 }}
-                              className="flex justify-start"
-                            >
-                              <div className="glass-card rounded-2xl px-4 py-2">
-                                <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
-                              </div>
-                            </motion.div>
-                          )}
-                          <div ref={messagesEndRef} />
-                        </div>
-                      </ScrollArea>
-
-                      <div className="p-4 border-t border-white/5 shrink-0">
-                        <div className="glass-card rounded-xl p-2 flex items-end gap-2">
-                          <textarea
-                            ref={textareaRef}
-                            placeholder="Ask a question..."
-                            value={message}
-                            onChange={(e) => setMessage(e.target.value)}
-                            onKeyDown={handleKeyDown}
-                            disabled={!courseId || isTyping}
-                            className="flex-1 bg-transparent border-0 text-white placeholder:text-gray-500 resize-none min-h-[44px] max-h-[120px] focus-visible:ring-0"
-                            rows={1}
-                          />
-                          <Button
-                            onClick={handleSend}
-                            disabled={!String(message || "").trim() || isTyping}
-                            className="btn-gradient rounded-xl h-10 w-10 p-0 shrink-0"
-                          >
-                            <Send className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      </div>
-                    </motion.div>
+                    renderChatPanel({ scrollHeightClass: "h-[300px]" })
                   )}
                 </AnimatePresence>
               </motion.div>
@@ -720,6 +742,26 @@ export default function VideoPlayer() {
         onClose={() => setIsSidebarOpen(false)}
         activeCategory="media"
       />
+
+      <Dialog
+        open={isChatPopoutOpen}
+        onOpenChange={(open) => {
+          setIsChatPopoutOpen(open);
+          if (!open && chatWasOpenRef.current) setIsChatOpen(true);
+        }}
+      >
+        <DialogContent className="glass-card border-white/10 bg-[#0F0F0F] text-white w-[min(960px,calc(100vw-2rem))] max-w-none p-0 overflow-hidden">
+          <DialogHeader className="p-4 border-b border-white/5">
+            <DialogTitle className="flex items-center gap-2">
+              <MessageSquare className="w-5 h-5 text-purple-400" />
+              Chat
+            </DialogTitle>
+          </DialogHeader>
+          <div className="p-4">
+            {renderChatPanel({ scrollHeightClass: "h-[60vh]" })}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
