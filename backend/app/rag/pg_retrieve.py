@@ -57,6 +57,15 @@ async def retrieve_course_chunk_hits(
         meta.setdefault("content_id", str(chunk.content_id))
         meta.setdefault("course_id", str(chunk.course_id))
         meta.setdefault("category", str(chunk.category))
+        # Prefer canonical columns over JSON metadata for video timestamps/linkage.
+        if getattr(chunk, "video_asset_id", None) is not None:
+            meta.setdefault("video_asset_id", str(chunk.video_asset_id))
+        if getattr(chunk, "chunk_start_sec", None) is not None:
+            meta.setdefault("start_sec", float(chunk.chunk_start_sec))  # type: ignore[arg-type]
+        if getattr(chunk, "chunk_end_sec", None) is not None:
+            meta.setdefault("end_sec", float(chunk.chunk_end_sec))  # type: ignore[arg-type]
+        if getattr(chunk, "chapter_id", None) is not None:
+            meta.setdefault("chapter_id", str(chunk.chapter_id))
         out.append(RagHit(text=str(chunk.text or ""), metadata=meta, score=float(score or 0.0)))
     return out
 

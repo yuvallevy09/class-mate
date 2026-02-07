@@ -145,6 +145,11 @@ async def _semantic_top_k(
       content_id,
       course_id,
       category,
+      video_asset_id,
+      chapter_id,
+      chunk_start_sec,
+      chunk_end_sec,
+      chunk_index_in_chapter,
       text,
       metadata,
       created_at,
@@ -172,6 +177,16 @@ async def _semantic_top_k(
         meta.setdefault("content_id", str(r.get("content_id")))
         meta.setdefault("course_id", str(r.get("course_id")))
         meta.setdefault("category", str(r.get("category")))
+        if r.get("video_asset_id") is not None:
+            meta.setdefault("video_asset_id", str(r.get("video_asset_id")))
+        if r.get("chapter_id") is not None:
+            meta.setdefault("chapter_id", str(r.get("chapter_id")))
+        if r.get("chunk_start_sec") is not None:
+            meta.setdefault("start_sec", float(r.get("chunk_start_sec") or 0.0))
+        if r.get("chunk_end_sec") is not None:
+            meta.setdefault("end_sec", float(r.get("chunk_end_sec") or 0.0))
+        if r.get("chunk_index_in_chapter") is not None:
+            meta.setdefault("chunk_index_in_chapter", int(r.get("chunk_index_in_chapter") or 0))
         dist = float(r.get("distance") or 0.0)
         # Return semantic score as similarity (higher is better) to keep it intuitive.
         out.append(RagHit(text=str(r.get("text") or ""), metadata=meta, score=1.0 - dist))
