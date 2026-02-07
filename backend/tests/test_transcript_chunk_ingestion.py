@@ -120,6 +120,10 @@ async def test_transcript_segments_are_ingested_into_content_chunks(monkeypatch)
             assert chunks[0].meta.get("doc_type") == "segment"
             assert chunks[0].meta.get("video_asset_id") == str(asset.id)
             assert chunks[0].meta.get("language_code") == "en"
+            # New video linkage fields (best-effort; chapters may be absent in this test setup).
+            assert chunks[0].video_asset_id == asset.id
+            assert chunks[0].chunk_start_sec is not None
+            assert chunks[0].chunk_end_sec is not None
     finally:
         await engine.dispose()
 

@@ -12,6 +12,7 @@ from app.db.models.content_chunk import ContentChunk
 from app.db.models.course_content import CourseContent
 from app.db.models.transcript_segment import TranscriptSegment
 from app.db.models.video_asset import VideoAsset
+from app.db.models.video_chapter import VideoChapter
 from app.rag.embeddings import get_embeddings
 from app.rag.embedding_config import EMBEDDING_DIMS
 
@@ -124,6 +125,19 @@ async def ingest_video_asset_transcript_to_chunks(
     category = (content.category if content is not None else "media") or "media"
     title = (content.title if content is not None else None) or None
 
+    # Best-effort: load chapters for this asset+language so we can link chunks to a chapter.
+    # For now, the transcription pipeline writes a single fallback chapter ("Full Lecture").
+    chapter_rows: list[VideoChapter] = []
+    try:
+        ch_res = await db.execute(
+            select(VideoChapter)
+            .where(VideoChapter.video_asset_id == asset.id, VideoChapter.language_code == language_code)
+            .order_by(VideoChapter.chapter_index.asc(), VideoChapter.start_sec.asc())
+        )
+        chapter_rows = list(ch_res.scalars().all())
+    except Exception:
+        chapter_rows = []
+
     sres = await db.execute(
         select(TranscriptSegment)
         .where(
@@ -160,6 +174,19 @@ async def ingest_video_asset_transcript_to_chunks(
 
     rows: list[ContentChunk] = []
     for i, (start_sec, end_sec, text) in enumerate(chunks):
+        # Assign a chapter by midpoint timestamp (best-effort).
+        chapter: VideoChapter | None = None
+        try:
+            mid = (float(start_sec) + float(end_sec)) / 2.0
+        except Exception:
+            mid = float(start_sec or 0.0)
+        for ch in chapter_rows:
+            if float(ch.start_sec) <= mid <= float(ch.end_sec):
+                chapter = ch
+                break
+        if chapter is None and chapter_rows:
+            chapter = chapter_rows[0]
+
         meta: dict[str, Any] = {
             "doc_type": "segment",
             "source_kind": "video",
@@ -171,11 +198,20 @@ async def ingest_video_asset_transcript_to_chunks(
         }
         if title:
             meta["title"] = title
+        if chapter is not None:
+            # Keep a small chapter label in metadata for citation UX.
+            meta["chapter_title"] = str(chapter.title or "").strip() or None
+
         row = ContentChunk(
             course_id=asset.course_id,
             content_id=asset.content_id,
+            video_asset_id=asset.id,
+            chapter_id=(chapter.id if chapter is not None else None),
             category=category,
             chunk_index=int(i),
+            chunk_index_in_chapter=int(i) if chapter is not None else None,
+            chunk_start_sec=float(start_sec),
+            chunk_end_sec=float(end_sec),
             text=text,
             meta=meta,
         )

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, Float, func
 from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -39,8 +39,26 @@ class ContentChunk(Base):
         index=True,
     )
 
+    # Optional video linkage for transcript-derived chunks.
+    video_asset_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("video_assets.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    # Optional chapter linkage for future semantic chapterization.
+    chapter_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("video_chapters.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     category: Mapped[str] = mapped_column(String(64), nullable=False, index=False)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    chunk_index_in_chapter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    chunk_start_sec: Mapped[float | None] = mapped_column(Float, nullable=True)
+    chunk_end_sec: Mapped[float | None] = mapped_column(Float, nullable=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     # Nullable: older ingestions and lexical-only usage can leave this unset.
     embedding: Mapped[str | None] = mapped_column(Vector(EMBEDDING_DIMS), nullable=True)
