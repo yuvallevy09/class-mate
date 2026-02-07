@@ -16,9 +16,11 @@ from app.db.models.course_content import CourseContent
 from app.db.models.transcript_segment import TranscriptSegment
 from app.db.models.user import User
 from app.db.models.video_asset import VideoAsset
+from app.db.models.video_chapter import VideoChapter
 from app.db.session import get_db
 from app.schemas.transcript_segment import TranscriptSegmentPublic
 from app.schemas.course_content import CourseContentPublic
+from app.schemas.video_chapter import VideoChapterPublic
 from app.schemas.video_asset import VideoAssetCreate, VideoAssetPublic
 from app.services.transcription import transcribe_video_asset
 from app.services.video_summary import generate_and_store_video_asset_summary
@@ -398,6 +400,31 @@ async def list_video_asset_segments(
     stmt = stmt.order_by(TranscriptSegment.start_sec.asc())
     seg_res = await db.execute(stmt)
     return list(seg_res.scalars().all())
+
+
+@router.get("/video-assets/{video_asset_id}/chapters", response_model=list[VideoChapterPublic])
+async def list_video_asset_chapters(
+    video_asset_id: UUID,
+    language_code: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[VideoChapter]:
+    # Ownership check via join.
+    res = await db.execute(
+        select(VideoAsset, Course)
+        .join(Course, Course.id == VideoAsset.course_id)
+        .where(VideoAsset.id == video_asset_id, Course.user_id == current_user.id)
+    )
+    row = res.first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video asset not found")
+
+    stmt = select(VideoChapter).where(VideoChapter.video_asset_id == video_asset_id)
+    if language_code and language_code.strip():
+        stmt = stmt.where(VideoChapter.language_code == language_code.strip())
+    stmt = stmt.order_by(VideoChapter.chapter_index.asc(), VideoChapter.start_sec.asc())
+    cres = await db.execute(stmt)
+    return list(cres.scalars().all())
 
 
 @router.get("/video-assets/{video_asset_id}/summary", response_model=VideoAssetSummaryPublic)
