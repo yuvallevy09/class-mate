@@ -22,6 +22,7 @@ from app.db.models.course_content import CourseContent
 from app.db.models.transcript_segment import TranscriptSegment
 from app.db.models.user import User
 from app.db.models.video_asset import VideoAsset
+from app.db.models.video_chapter import VideoChapter
 from app.db.session import get_db, get_session_maker
 from app.rag.hybrid_retrieve import HybridRetrieveConfig, retrieve_course_hybrid_hits
 from app.schemas.chat import ChatCitation, CourseChatRequest, CourseChatResponse
@@ -116,6 +117,64 @@ async def _attach_citation_urls(
                 continue
             # Stable link: API endpoint will redirect to a fresh presigned URL on click.
             c.url = f"/api/v1/contents/{c.content_id}/download-redirect"
+    return citations
+
+
+async def _attach_video_chapter_titles(
+    *,
+    db: AsyncSession,
+    course_id: UUID,
+    citations: list[ChatCitation],
+) -> list[ChatCitation]:
+    """
+    Best-effort: attach `chapterTitle` for video citations based on `chapterId`.
+
+    We prefer resolving via the `video_chapters` table (first-class artifact) rather than
+    relying on chunk metadata, so citations remain stable even if chunk meta changes.
+    """
+    if not citations:
+        return citations
+
+    chapter_ids: set[UUID] = set()
+    for c in citations:
+        extra = c.extra or {}
+        if str(extra.get("type") or "").lower() != "video":
+            continue
+        if extra.get("chapterTitle"):
+            continue
+        raw = extra.get("chapterId") or extra.get("chapter_id")
+        if not raw:
+            continue
+        try:
+            chapter_ids.add(UUID(str(raw)))
+        except ValueError:
+            continue
+
+    if not chapter_ids:
+        return citations
+
+    res = await db.execute(
+        select(VideoChapter.id, VideoChapter.title)
+        .join(VideoAsset, VideoAsset.id == VideoChapter.video_asset_id)
+        .where(VideoAsset.course_id == course_id, VideoChapter.id.in_(list(chapter_ids)))
+    )
+    title_by_id: dict[str, str] = {str(cid): str(title or "").strip() for (cid, title) in res.all()}
+    if not title_by_id:
+        return citations
+
+    for c in citations:
+        extra = c.extra or {}
+        if str(extra.get("type") or "").lower() != "video":
+            continue
+        if extra.get("chapterTitle"):
+            continue
+        raw = extra.get("chapterId") or extra.get("chapter_id")
+        if not raw:
+            continue
+        title = title_by_id.get(str(raw))
+        if title:
+            extra["chapterTitle"] = title
+            c.extra = extra
     return citations
 
 
@@ -563,8 +622,9 @@ async def course_chat(
         )
         citations = []
 
-    # Best-effort: attach URLs to citations, then inject inline citation links into the reply.
+    # Best-effort: enrich citations, then inject inline citation links into the reply.
     citations = await _attach_citation_urls(db=db, settings=settings, course_id=course.id, citations=citations)
+    citations = await _attach_video_chapter_titles(db=db, course_id=course.id, citations=citations)
     reply_with_links = _format_reply_with_citation_links(reply, citations)
 
     # Persist citations separately (JSONB) so the frontend can render a structured Sources section.

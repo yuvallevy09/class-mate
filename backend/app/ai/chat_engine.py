@@ -115,6 +115,7 @@ class ChatEngine:
                         "startSec": meta.get("start_sec"),
                         "endSec": meta.get("end_sec"),
                         "languageCode": meta.get("language_code"),
+                        "chapterId": meta.get("chapter_id"),
                         "chapterTitle": meta.get("chapter_title"),
                     }
                 )
