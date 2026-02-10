@@ -66,6 +66,7 @@ function buildSourcesModel(citations = []) {
     const sInt = Math.max(0, Math.floor(start));
     const eInt = Math.max(0, Math.floor(end));
     const rngKey = `${sInt}-${eInt}`;
+    const chapterId = extra?.chapterId ?? extra?.chapter_id ?? null;
 
     if (!videoGroups.has(contentId)) {
       videoGroups.set(contentId, {
@@ -87,6 +88,7 @@ function buildSourcesModel(citations = []) {
         e: eInt,
         // Use the first URL we see for the range
         url: typeof c?.url === "string" ? c.url : null,
+        chapterId: chapterId ? String(chapterId) : null,
         chapterTitle:
           (typeof extra?.chapterTitle === "string" && extra.chapterTitle.trim()) ||
           null,
@@ -96,6 +98,7 @@ function buildSourcesModel(citations = []) {
 
     const r = g.ranges.get(rngKey);
     if (!r.url && typeof c?.url === "string") r.url = c.url;
+    if (!r.chapterId && chapterId) r.chapterId = String(chapterId);
     if (!r.chapterTitle && typeof extra?.chapterTitle === "string" && extra.chapterTitle.trim()) {
       r.chapterTitle = extra.chapterTitle.trim();
     }
@@ -122,6 +125,12 @@ function Sources({ citations }) {
   const hasAny = (model.video?.length || 0) + (model.nonVideo?.length || 0) > 0;
   if (!hasAny) return null;
 
+  const isRedundantChapterTitle = (t) => {
+    const s = String(t || "").trim();
+    if (!s) return true;
+    return s.toLowerCase() === "full lecture";
+  };
+
   return (
     <div className="mt-4 pt-4 border-t border-white/10 text-xs lg:text-sm text-gray-200/90">
       <div className="font-semibold mb-2">Sources</div>
@@ -133,12 +142,22 @@ function Sources({ citations }) {
               <div className="font-semibold">
                 {g.leaderIndex}. {g.title} — <span className="text-gray-300">Video</span>
               </div>
-              <ul className="mt-1 ml-5 list-disc space-y-1">
-                {g.ranges.map((r) => {
+              {(() => {
+                const meaningfulChapters = Array.from(
+                  new Set(
+                    (g.ranges || [])
+                      .map((r) => String(r?.chapterTitle || "").trim())
+                      .filter((t) => t && !isRedundantChapterTitle(t))
+                  )
+                );
+                const shouldGroupByChapter = meaningfulChapters.length > 1;
+
+                const renderRangeLi = (r) => {
                   const timeLabel =
                     r.e !== r.s ? `${fmtTimestamp(r.s)}–${fmtTimestamp(r.e)}` : fmtTimestamp(r.s);
+                  const showInlineChapter = !shouldGroupByChapter && !isRedundantChapterTitle(r.chapterTitle);
                   return (
-                    <li key={`${g.contentId}:${r.s}-${r.e}`}>
+                    <li key={`${g.contentId}:${r.s}-${r.e}:${String(r.chapterId || "")}`}>
                       {/* Anchor(s) for scroll targets: one per original citation index */}
                       {Array.isArray(r.citationIndices) &&
                         r.citationIndices.map((i) => (
@@ -157,13 +176,41 @@ function Sources({ citations }) {
                       ) : (
                         <span>{timeLabel}</span>
                       )}
-                      {r.chapterTitle ? (
-                        <span className="text-gray-300"> — {r.chapterTitle}</span>
+                      {showInlineChapter ? (
+                        <span className="text-gray-300"> — {String(r.chapterTitle).trim()}</span>
                       ) : null}
                     </li>
                   );
-                })}
-              </ul>
+                };
+
+                if (!shouldGroupByChapter) {
+                  return <ul className="mt-1 ml-5 list-disc space-y-1">{g.ranges.map(renderRangeLi)}</ul>;
+                }
+
+                // Group by chapter title (fall back to "Other" if missing).
+                const groups = new Map();
+                for (const r of g.ranges || []) {
+                  const title = String(r?.chapterTitle || "").trim();
+                  const key = title && !isRedundantChapterTitle(title) ? title : "Other";
+                  if (!groups.has(key)) groups.set(key, []);
+                  groups.get(key).push(r);
+                }
+
+                return (
+                  <div className="mt-2 space-y-3">
+                    {Array.from(groups.entries()).map(([chapterTitle, ranges]) => (
+                      <div key={chapterTitle}>
+                        {chapterTitle !== "Other" ? (
+                          <div className="text-gray-300 font-medium">{chapterTitle}</div>
+                        ) : null}
+                        <ul className="mt-1 ml-5 list-disc space-y-1">
+                          {ranges.map(renderRangeLi)}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           ))}
         </div>
