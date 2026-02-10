@@ -19,7 +19,7 @@ from app.core.settings import Settings, get_settings
 from app.db.models.transcript_segment import TranscriptSegment
 from app.db.models.video_asset import VideoAsset
 from app.db.session import get_session_maker
-from app.services.video_chapters import replace_with_fallback_chapter
+from app.services.video_chapters import chapterize_or_fallback
 from app.services.transcript_chunk_ingestion import ingest_video_asset_transcript_to_chunks
 from app.services.video_summary import generate_and_store_video_asset_summary
 
@@ -383,17 +383,17 @@ async def transcribe_video_asset(*, video_asset_id: UUID, requested_language: st
                 # query below (same transaction, but explicit flush keeps behavior predictable).
                 await db.flush()
 
-                # Chapters (fallback): replace-all with one chapter spanning the entire lecture.
-                # Best-effort: never fail the pipeline because chapter generation failed.
+                # Chapters (best-effort): try semantic chapters; fall back to a single "Full Lecture" chapter.
                 try:
                     end_sec = max((float(s.end_sec) for s in segments), default=0.0)
-                    await replace_with_fallback_chapter(
+                    await chapterize_or_fallback(
                         db=db,
                         video_asset_id=asset.id,
                         language_code=language_code,
                         end_sec=end_sec,
                     )
                 except Exception:
+                    # Never fail transcription because chapters failed.
                     pass
 
                 # Also write transcript chunks into the unified retrieval corpus (`content_chunks`)
