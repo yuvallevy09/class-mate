@@ -5,10 +5,11 @@ import logging
 from typing import Any, Iterable, Sequence
 from uuid import UUID
 
-from sqlalchemy import text as sa_text
+from sqlalchemy import select, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.settings import Settings, get_settings
+from app.db.models.content_chunk import ContentChunk
 from app.rag.embeddings import get_embeddings
 from app.rag.embedding_config import EMBEDDING_DIMS
 from app.rag.pg_retrieve import retrieve_course_chunk_hits
@@ -36,6 +37,9 @@ class HybridRetrieveConfig:
     semantic_k: int = 20
     top_k: int = 8
     rrf_k0: int = 60
+    neighbor_before: int = 1
+    neighbor_after: int = 1
+    neighbor_max_additional: int = 6
 
 
 def _vector_literal(vec: list[float]) -> str:
@@ -80,6 +84,119 @@ def _rrf_merge(
         m.setdefault("sources", sorted(list(it["sources"])))
         out.append(RagHit(text=h.text, metadata=m, score=float(it["rrf"])))
     return out
+
+
+async def _expand_neighbors(
+    *,
+    db: AsyncSession,
+    base_hits: Sequence[RagHit],
+    before: int,
+    after: int,
+    max_additional: int,
+) -> list[RagHit]:
+    """
+    Expand retrieval context by fetching neighboring chunks (±N) within the same chapter.
+
+    This is designed to improve answer quality for long-form sources (e.g., video transcripts)
+    without inflating individual chunk sizes.
+    """
+    b = max(0, int(before))
+    a = max(0, int(after))
+    cap = max(0, int(max_additional))
+    if cap <= 0 or (b == 0 and a == 0) or not base_hits:
+        return list(base_hits)
+
+    # Seed keys for dedupe.
+    seen_chunk_ids: set[str] = set()
+    seeds: list[tuple[str, int]] = []  # (chapter_id, chunk_index_in_chapter)
+
+    for h in base_hits:
+        m = h.metadata or {}
+        cid = m.get("chunk_id")
+        if cid:
+            seen_chunk_ids.add(str(cid))
+        chap = m.get("chapter_id")
+        idx = m.get("chunk_index_in_chapter")
+        if chap is None or idx is None:
+            continue
+        try:
+            seeds.append((str(chap), int(idx)))
+        except Exception:
+            continue
+
+    if not seeds:
+        return list(base_hits)
+
+    # Build a small set of desired neighbor indices per chapter.
+    desired: dict[str, set[int]] = {}
+    for chap_id, idx in seeds:
+        s = desired.setdefault(chap_id, set())
+        for d in range(1, b + 1):
+            s.add(idx - d)
+        for d in range(1, a + 1):
+            s.add(idx + d)
+
+    # Remove negative indices.
+    for chap_id in list(desired.keys()):
+        desired[chap_id] = {i for i in desired[chap_id] if i >= 0}
+        if not desired[chap_id]:
+            desired.pop(chap_id, None)
+
+    if not desired:
+        return list(base_hits)
+
+    # Fetch neighbors (best-effort). Use per-chapter query to keep it simple.
+    neighbors: list[RagHit] = []
+    for chap_id, idxs in desired.items():
+        if not idxs:
+            continue
+        # Cap how many we ask for per chapter.
+        want = sorted(list(idxs))[: max(1, cap)]
+        try:
+            chap_uuid = UUID(str(chap_id))
+        except Exception:
+            continue
+
+        stmt = (
+            select(ContentChunk)
+            .where(ContentChunk.chapter_id == chap_uuid)
+            .where(ContentChunk.chunk_index_in_chapter.in_(want))
+            .order_by(ContentChunk.chunk_index_in_chapter.asc())
+        )
+        res = await db.execute(stmt)
+        chunks = list(res.scalars().all())
+        for chunk in chunks:
+            chunk_id = str(getattr(chunk, "id", "") or "")
+            if not chunk_id or chunk_id in seen_chunk_ids:
+                continue
+            seen_chunk_ids.add(chunk_id)
+            meta = dict(getattr(chunk, "meta", None) or {})
+            meta.setdefault("chunk_id", chunk_id)
+            meta.setdefault("content_id", str(getattr(chunk, "content_id", "")))
+            meta.setdefault("course_id", str(getattr(chunk, "course_id", "")))
+            meta.setdefault("category", str(getattr(chunk, "category", "")))
+            if getattr(chunk, "video_asset_id", None) is not None:
+                meta.setdefault("video_asset_id", str(chunk.video_asset_id))
+            if getattr(chunk, "chapter_id", None) is not None:
+                meta.setdefault("chapter_id", str(chunk.chapter_id))
+            if getattr(chunk, "chunk_start_sec", None) is not None:
+                meta.setdefault("start_sec", float(chunk.chunk_start_sec))  # type: ignore[arg-type]
+            if getattr(chunk, "chunk_end_sec", None) is not None:
+                meta.setdefault("end_sec", float(chunk.chunk_end_sec))  # type: ignore[arg-type]
+            if getattr(chunk, "chunk_index_in_chapter", None) is not None:
+                meta.setdefault("chunk_index_in_chapter", int(chunk.chunk_index_in_chapter))  # type: ignore[arg-type]
+            meta.setdefault("neighbor", True)
+            neighbors.append(RagHit(text=str(getattr(chunk, "text", "") or ""), metadata=meta, score=None))
+            if len(neighbors) >= cap:
+                break
+        if len(neighbors) >= cap:
+            break
+
+    if not neighbors:
+        return list(base_hits)
+
+    # Preserve base ordering; append neighbors after.
+    return list(base_hits) + neighbors
 
 
 async def _semantic_top_k(
@@ -236,10 +353,24 @@ async def retrieve_course_hybrid_hits(
         )
         semantic = []
 
-    # If semantic is unavailable, keep existing behavior (BM25 only).
+    # If semantic is unavailable, keep existing behavior (BM25 only), but still expand neighbors.
     if not semantic:
-        return lexical[: int(cfg.top_k)]
+        base = lexical[: int(cfg.top_k)]
+        return await _expand_neighbors(
+            db=db,
+            base_hits=base,
+            before=int(cfg.neighbor_before),
+            after=int(cfg.neighbor_after),
+            max_additional=int(cfg.neighbor_max_additional),
+        )
 
-    return _rrf_merge(lexical=lexical, semantic=semantic, k0=int(cfg.rrf_k0), top_k=int(cfg.top_k))
+    base = _rrf_merge(lexical=lexical, semantic=semantic, k0=int(cfg.rrf_k0), top_k=int(cfg.top_k))
+    return await _expand_neighbors(
+        db=db,
+        base_hits=base,
+        before=int(cfg.neighbor_before),
+        after=int(cfg.neighbor_after),
+        max_additional=int(cfg.neighbor_max_additional),
+    )
 
 

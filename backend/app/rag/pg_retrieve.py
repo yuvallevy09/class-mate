@@ -66,6 +66,8 @@ async def retrieve_course_chunk_hits(
             meta.setdefault("end_sec", float(chunk.chunk_end_sec))  # type: ignore[arg-type]
         if getattr(chunk, "chapter_id", None) is not None:
             meta.setdefault("chapter_id", str(chunk.chapter_id))
+        if getattr(chunk, "chunk_index_in_chapter", None) is not None:
+            meta.setdefault("chunk_index_in_chapter", int(chunk.chunk_index_in_chapter))  # type: ignore[arg-type]
         out.append(RagHit(text=str(chunk.text or ""), metadata=meta, score=float(score or 0.0)))
     return out
 
