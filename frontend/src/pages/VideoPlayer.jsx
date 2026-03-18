@@ -239,7 +239,7 @@ export default function VideoPlayer() {
       const payload = noteDoc || { type: "doc", content: [{ type: "paragraph" }] };
       window.localStorage.setItem(noteStorageKey, JSON.stringify(payload));
       toast({ title: "Saved", description: "Your note was saved in this browser." });
-    } catch (e) {
+    } catch {
       toast({
         title: "Couldn’t save note",
         description: "Your browser blocked local storage. Try a different browser setting.",
@@ -302,6 +302,7 @@ export default function VideoPlayer() {
 
   const aiSummaryText = String(videoSummary?.aiSummary || "").trim();
   const aiSummaryMarkdown = useMemo(() => linkifySummaryTimestamps(aiSummaryText), [aiSummaryText]);
+  const aiTitleText = String(videoSummary?.aiTitle || "").trim();
 
   const markdownComponents = useMemo(
     () => ({
@@ -582,7 +583,7 @@ export default function VideoPlayer() {
                 Videos
               </Link>
               <span className="text-gray-600">/</span>
-              <span className="text-white font-medium">{content?.title || "Video"}</span>
+              <span className="text-white font-medium">{aiTitleText || content?.title || "Video"}</span>
             </div>
           </div>
         </div>
@@ -727,7 +728,12 @@ export default function VideoPlayer() {
               >
                 <div className="flex items-center gap-2">
                   <Sparkles className="w-5 h-5 text-purple-400" />
-                  <h2 className="text-xl font-semibold">AI Summary</h2>
+                  <div className="flex flex-col items-start">
+                    <h2 className="text-xl font-semibold">AI Summary</h2>
+                    {aiTitleText ? (
+                      <div className="text-xs text-gray-400 mt-0.5">AI title: {aiTitleText}</div>
+                    ) : null}
+                  </div>
                 </div>
                 <span className={`text-gray-400 transition-transform ${isSummaryExpanded ? "" : "-rotate-90"}`}>
                   ▾

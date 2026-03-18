@@ -52,6 +52,11 @@ class VideoAsset(Base):
     ai_summary_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ai_summary_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Stored AI title (generated once, persisted for stable UX).
+    ai_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ai_title_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ai_title_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

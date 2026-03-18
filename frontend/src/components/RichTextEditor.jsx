@@ -156,8 +156,6 @@ export default function RichTextEditor({
     },
   });
 
-  if (!editor) return null;
-
   // TipTap initializes once; hydrate from initialContent when it becomes available.
   const hydratedRef = useRef(false);
   useEffect(() => {
@@ -171,6 +169,8 @@ export default function RichTextEditor({
       // ignore
     }
   }, [editor, initialContent]);
+
+  if (!editor) return null;
 
   const currentFont =
     editor.getAttributes("textStyle")?.fontFamily || "";

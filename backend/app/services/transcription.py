@@ -436,7 +436,7 @@ async def transcribe_video_asset(*, video_asset_id: UUID, requested_language: st
                 try:
                     # Refresh in case another worker already wrote it.
                     await db.refresh(asset)
-                    if asset.ai_summary is None:
+                    if asset.ai_summary is None or getattr(asset, "ai_title", None) is None:
                         await generate_and_store_video_asset_summary(
                             db=db,
                             settings=settings,

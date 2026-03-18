@@ -178,7 +178,8 @@ async def _attach_video_chapter_titles(
     return citations
 
 
-_CITATION_RE = re.compile(r"\[(?:#\s*)?(\d{1,3})\]")
+# Optional ( ) before and (\.) after: period goes before the link; leading space is dropped so "...cloud. ¹ᵃ" not "...cloud . ¹ᵃ".
+_CITATION_RE = re.compile(r"( )?\[(?:#\s*)?(\d{1,3})\](\.)?")
 
 
 _SUPERSCRIPT_DIGITS = {
@@ -306,7 +307,7 @@ def _format_reply_with_citation_links(reply: str, citations: list[ChatCitation])
 
     def repl(m: re.Match) -> str:
         try:
-            i = int(m.group(1))
+            i = int(m.group(2))
         except Exception:
             return m.group(0)
         if not (1 <= i <= n):
@@ -320,9 +321,14 @@ def _format_reply_with_citation_links(reply: str, citations: list[ChatCitation])
             video_no = video_group_first_index.get(key, i)
             letter = video_citation_to_letter.get(i, "")
             display = f"{_sup_number(video_no)}{_sup_letter(letter)}"
-            return f"[{display}]({href})"
-        # Non-video citations use their direct citation index.
-        return f"[{_sup_number(i)}]({href})"
+            link = f"[{display}]({href})"
+        else:
+            link = f"[{_sup_number(i)}]({href})"
+        # If the citation was immediately before a period, put the period first then the link (no space before the period).
+        if m.group(3) == ".":
+            return ". " + link
+        # Preserve any space that was before the citation when there's no trailing period.
+        return (m.group(1) or "") + link
 
     return _CITATION_RE.sub(repl, text)
 

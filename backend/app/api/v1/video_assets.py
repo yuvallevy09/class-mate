@@ -59,6 +59,9 @@ class FinalizeVideoResponse(BaseModel):
 class VideoAssetSummaryPublic(BaseModel):
     video_asset_id: UUID = Field(serialization_alias="videoAssetId")
     status: str
+    ai_title: str | None = Field(default=None, serialization_alias="aiTitle")
+    ai_title_generated_at: datetime | None = Field(default=None, serialization_alias="aiTitleGeneratedAt")
+    ai_title_error: str | None = Field(default=None, serialization_alias="aiTitleError")
     ai_summary: str | None = Field(default=None, serialization_alias="aiSummary")
     ai_summary_generated_at: datetime | None = Field(default=None, serialization_alias="aiSummaryGeneratedAt")
     ai_summary_error: str | None = Field(default=None, serialization_alias="aiSummaryError")
@@ -447,7 +450,11 @@ async def get_video_asset_summary(
 
     # If missing but transcript exists (e.g. older assets), best-effort backfill on first request.
     # This keeps the UX stable: once generated, all future visits reuse the stored summary.
-    if not asset.ai_summary and asset.status in {"done", "done_no_embeddings", "done_no_index"}:
+    if (not asset.ai_summary or getattr(asset, "ai_title", None) is None) and asset.status in {
+        "done",
+        "done_no_embeddings",
+        "done_no_index",
+    }:
         try:
             await generate_and_store_video_asset_summary(
                 db=db,
@@ -463,6 +470,9 @@ async def get_video_asset_summary(
     return VideoAssetSummaryPublic(
         video_asset_id=asset.id,
         status=str(asset.status or ""),
+        ai_title=getattr(asset, "ai_title", None),
+        ai_title_generated_at=getattr(asset, "ai_title_generated_at", None),
+        ai_title_error=getattr(asset, "ai_title_error", None),
         ai_summary=asset.ai_summary,
         ai_summary_generated_at=asset.ai_summary_generated_at,
         ai_summary_error=asset.ai_summary_error,
