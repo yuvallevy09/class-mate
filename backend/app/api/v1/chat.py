@@ -60,6 +60,7 @@ class VideoChatRequest(BaseModel):
 
 class VideoChatResponse(BaseModel):
     text: str
+    citations: list[ChatCitation] = Field(default_factory=list)
 
 
 async def _attach_citation_urls(
@@ -485,6 +486,28 @@ async def course_video_chat(
             ]
         ).strip()
 
+    # RAG (chat mode only): same hybrid retrieval as course chat over the course corpus.
+    rag_hits: list = []
+    if mode == "chat" and bool(settings.rag_enabled):
+        try:
+            SessionLocal = get_session_maker()
+            async with SessionLocal() as rag_db:
+                rag_hits = await retrieve_course_hybrid_hits(
+                    db=rag_db,
+                    course_id=course.id,
+                    query=(body.message or "").strip(),
+                    cfg=HybridRetrieveConfig(
+                        lexical_k=max(10, int(settings.rag_top_k) * 3),
+                        semantic_k=max(10, int(settings.rag_top_k) * 3),
+                        top_k=int(settings.rag_top_k),
+                        rrf_k0=60,
+                    ),
+                    categories=None,
+                )
+        except Exception as e:
+            logger.warning("Video chat RAG retrieval failed (best-effort): %s", str(e))
+            rag_hits = []
+
     engine = ChatEngine(settings)
     try:
         text, _citations = await engine.generate_reply(
@@ -494,14 +517,18 @@ async def course_video_chat(
             course_description=str(course.description or ""),
             history=history,
             user_message=user_message,
-            rag_hits=None,
+            rag_hits=rag_hits,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="LLM request failed") from e
 
-    return VideoChatResponse(text=str(text or "").strip())
+    citations = await _attach_citation_urls(db=db, settings=settings, course_id=course.id, citations=_citations)
+    citations = await _attach_video_chapter_titles(db=db, course_id=course.id, citations=citations)
+    reply_with_links = _format_reply_with_citation_links(text, citations)
+
+    return VideoChatResponse(text=str(reply_with_links or "").strip(), citations=citations)
 
 
 @router.post("/courses/{course_id}/chat", response_model=CourseChatResponse)

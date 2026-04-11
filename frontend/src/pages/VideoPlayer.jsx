@@ -109,6 +109,265 @@ function extractPlainText(node) {
   return "";
 }
 
+function isVideoCitation(citation) {
+  const extra = citation?.extra || {};
+  const t = String(extra?.type || "").toLowerCase();
+  const citedContentId = citation?.content_id || citation?.contentId || null;
+  return t === "video" && !!citedContentId;
+}
+
+function getCitationContentId(citation) {
+  return citation?.content_id || citation?.contentId || null;
+}
+
+function getCitationTitle(citation) {
+  const extra = citation?.extra || {};
+  return (
+    String(citation?.title || "").trim() ||
+    String(extra?.original_filename || "").trim() ||
+    String(getCitationContentId(citation) || "").trim() ||
+    "Course content"
+  );
+}
+
+function buildSourcesModel(citations = []) {
+  const items = Array.isArray(citations) ? citations : [];
+  const videoGroups = new Map();
+  const nonVideo = [];
+
+  items.forEach((citation, index) => {
+    const i = index + 1;
+    if (!isVideoCitation(citation)) {
+      nonVideo.push({ i, citation });
+      return;
+    }
+
+    const contentId = String(getCitationContentId(citation));
+    const extra = citation?.extra || {};
+    const start = Number(extra?.startSec || 0);
+    const end = Number(extra?.endSec || start);
+    const sInt = Math.max(0, Math.floor(start));
+    const eInt = Math.max(0, Math.floor(end));
+    const rangeKey = `${sInt}-${eInt}`;
+    const chapterId = extra?.chapterId ?? extra?.chapter_id ?? null;
+
+    if (!videoGroups.has(contentId)) {
+      videoGroups.set(contentId, {
+        contentId,
+        leaderIndex: i,
+        title: getCitationTitle(citation),
+        ranges: new Map(),
+      });
+    }
+
+    const group = videoGroups.get(contentId);
+    group.leaderIndex = Math.min(group.leaderIndex, i);
+    if (!group.title) group.title = getCitationTitle(citation);
+
+    if (!group.ranges.has(rangeKey)) {
+      group.ranges.set(rangeKey, {
+        s: sInt,
+        e: eInt,
+        url: typeof citation?.url === "string" ? citation.url : null,
+        chapterId: chapterId ? String(chapterId) : null,
+        chapterTitle:
+          (typeof extra?.chapterTitle === "string" && extra.chapterTitle.trim()) || null,
+        citationIndices: [],
+      });
+    }
+
+    const range = group.ranges.get(rangeKey);
+    if (!range.url && typeof citation?.url === "string") range.url = citation.url;
+    if (!range.chapterId && chapterId) range.chapterId = String(chapterId);
+    if (!range.chapterTitle && typeof extra?.chapterTitle === "string" && extra.chapterTitle.trim()) {
+      range.chapterTitle = extra.chapterTitle.trim();
+    }
+    range.citationIndices.push(i);
+  });
+
+  const video = Array.from(videoGroups.values())
+    .sort((a, b) => a.leaderIndex - b.leaderIndex)
+    .map((group) => {
+      const ranges = Array.from(group.ranges.values());
+      return {
+        ...group,
+        ranges: ranges.map((range, index) => ({
+          ...range,
+          letter: String.fromCharCode("a".charCodeAt(0) + Math.min(index, 25)),
+        })),
+      };
+    });
+
+  return { video, nonVideo };
+}
+
+function getSourceAnchorId(messageKey, citationIndex) {
+  return `cm-src-${messageKey}-${citationIndex}`;
+}
+
+function rewriteCitationAnchors(text, messageKey) {
+  return String(text || "").replace(/#cm-src-(\d+)/g, (_match, rawIndex) => {
+    return `#${getSourceAnchorId(messageKey, Number(rawIndex))}`;
+  });
+}
+
+function VideoChatSources({ citations, messageKey, currentContentId, onSeekToSeconds }) {
+  const model = useMemo(() => buildSourcesModel(citations), [citations]);
+  const hasAny = (model.video?.length || 0) + (model.nonVideo?.length || 0) > 0;
+  if (!hasAny) return null;
+
+  const isRedundantChapterTitle = (title) => {
+    const normalized = String(title || "").trim();
+    if (!normalized) return true;
+    return normalized.toLowerCase() === "full lecture";
+  };
+
+  return (
+    <div className="mt-4 border-t border-white/10 pt-4 text-xs text-gray-200/90">
+      <div className="mb-2 font-semibold">Sources</div>
+
+      {!!model.video?.length && (
+        <div className="space-y-3">
+          {model.video.map((group) => {
+            const isCurrentVideo = String(group.contentId) === String(currentContentId || "");
+            return (
+              <div key={group.contentId}>
+                <div className="font-semibold">
+                  {group.leaderIndex}. {group.title} <span className="text-gray-300">Video</span>
+                </div>
+                {(() => {
+                  const meaningfulChapters = Array.from(
+                    new Set(
+                      (group.ranges || [])
+                        .map((range) => String(range?.chapterTitle || "").trim())
+                        .filter((title) => title && !isRedundantChapterTitle(title))
+                    )
+                  );
+                  const shouldGroupByChapter = meaningfulChapters.length > 1;
+
+                  const renderRangeItem = (range) => {
+                    const timeLabel =
+                      range.e !== range.s ? `${fmtTimestamp(range.s)}-${fmtTimestamp(range.e)}` : fmtTimestamp(range.s);
+                    const showInlineChapter =
+                      !shouldGroupByChapter && !isRedundantChapterTitle(range.chapterTitle);
+                    const content = isCurrentVideo ? (
+                      <button
+                        type="button"
+                        className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
+                        onClick={() => onSeekToSeconds(range.s)}
+                      >
+                        {timeLabel}
+                      </button>
+                    ) : range.url ? (
+                      <a
+                        href={range.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
+                      >
+                        {timeLabel}
+                      </a>
+                    ) : (
+                      <span>{timeLabel}</span>
+                    );
+
+                    return (
+                      <li key={`${group.contentId}:${range.s}-${range.e}:${String(range.chapterId || "")}`}>
+                        {Array.isArray(range.citationIndices) &&
+                          range.citationIndices.map((citationIndex) => (
+                            <span
+                              key={citationIndex}
+                              id={getSourceAnchorId(messageKey, citationIndex)}
+                              className="relative -top-20"
+                            />
+                          ))}
+                        <span className="font-semibold">{range.letter}.</span> {content}
+                        {showInlineChapter ? (
+                          <span className="text-gray-300"> {" - "} {String(range.chapterTitle).trim()}</span>
+                        ) : null}
+                      </li>
+                    );
+                  };
+
+                  if (!shouldGroupByChapter) {
+                    return <ul className="mt-1 ml-5 list-disc space-y-1">{group.ranges.map(renderRangeItem)}</ul>;
+                  }
+
+                  const groupedRanges = new Map();
+                  for (const range of group.ranges || []) {
+                    const title = String(range?.chapterTitle || "").trim();
+                    const key = title && !isRedundantChapterTitle(title) ? title : "Other";
+                    if (!groupedRanges.has(key)) groupedRanges.set(key, []);
+                    groupedRanges.get(key).push(range);
+                  }
+
+                  return (
+                    <div className="mt-2 space-y-3">
+                      {Array.from(groupedRanges.entries()).map(([chapterTitle, ranges]) => (
+                        <div key={chapterTitle}>
+                          {chapterTitle !== "Other" ? (
+                            <div className="font-medium text-gray-300">{chapterTitle}</div>
+                          ) : null}
+                          <ul className="mt-1 ml-5 list-disc space-y-1">{ranges.map(renderRangeItem)}</ul>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {!!model.nonVideo?.length && (
+        <div className={`space-y-1 ${model.video?.length ? "mt-4" : ""}`}>
+          {model.nonVideo.map(({ i, citation }) => {
+            const extra = citation?.extra || {};
+            const title = getCitationTitle(citation);
+            const pageStart = extra?.pageStart ?? extra?.page_start ?? null;
+            const pageEnd = extra?.pageEnd ?? extra?.page_end ?? null;
+            const pageLabel =
+              pageStart || pageEnd
+                ? (() => {
+                    const a = Number(pageStart || pageEnd);
+                    const b = Number(pageEnd || pageStart);
+                    if (Number.isFinite(a) && Number.isFinite(b)) {
+                      return a === b ? ` (p.${a})` : ` (p.${a}-${b})`;
+                    }
+                    return "";
+                  })()
+                : "";
+            const url = typeof citation?.url === "string" ? citation.url : null;
+
+            return (
+              <div key={i} className="leading-relaxed">
+                <span id={getSourceAnchorId(messageKey, i)} className="relative -top-20" />
+                <span className="font-semibold">{i}.</span> {title}
+                {pageLabel}
+                {url ? (
+                  <>
+                    {" "}
+                    -{" "}
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
+                    >
+                      Open source
+                    </a>
+                  </>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function VideoPlayer() {
   const location = useLocation();
   const { courseId, contentId } = useMemo(() => {
@@ -134,6 +393,7 @@ export default function VideoPlayer() {
   const [isSummaryExpanded, setIsSummaryExpanded] = useState(true);
 
   const messagesEndRef = useRef(null);
+  const chatScrollRef = useRef(null);
   const textareaRef = useRef(null);
   const videoRef = useRef(null);
   const chatWasOpenRef = useRef(false);
@@ -316,6 +576,21 @@ export default function VideoPlayer() {
         const h = String(href || "");
         const label = extractPlainText(children).trim();
 
+        if (h.startsWith("#cm-src-")) {
+          return (
+            <a
+              href={h}
+              className="ml-0.5 align-super text-[0.75em] text-purple-300 hover:text-purple-200 no-underline"
+              onClick={(e) => {
+                e.preventDefault();
+                scrollChatSourceIntoView(h.slice(1));
+              }}
+            >
+              {children}
+            </a>
+          );
+        }
+
         // Primary: our synthetic timestamp links.
         if (h.toLowerCase().startsWith("videotime:")) {
           const rest = h.slice("videotime:".length);
@@ -405,12 +680,19 @@ export default function VideoPlayer() {
         contentId,
         videoAssetId,
       });
-      setMessages((prev) => [...prev, { role: "assistant", content: res?.text || "" }]);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: res?.text || "",
+          citations: Array.isArray(res?.citations) ? res.citations : [],
+        },
+      ]);
     } catch (e) {
       const msg = e?.data?.detail || e?.message || "Failed to send message. Please try again.";
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: `Sorry, I encountered an error. ${msg}` },
+        { role: "assistant", content: `Sorry, I encountered an error. ${msg}`, citations: [] },
       ]);
     } finally {
       setIsTyping(false);
@@ -421,6 +703,34 @@ export default function VideoPlayer() {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
+    }
+  };
+
+  const scrollChatToBottom = (behavior = "smooth") => {
+    const el = chatScrollRef.current;
+    if (!el) return;
+    const top = el.scrollHeight;
+    try {
+      el.scrollTo({ top, behavior });
+    } catch {
+      el.scrollTop = top;
+    }
+  };
+
+  const scrollChatSourceIntoView = (sourceId) => {
+    const container = chatScrollRef.current;
+    const target = typeof document !== "undefined" ? document.getElementById(sourceId) : null;
+    if (!container || !target) return;
+
+    const containerRect = container.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const top =
+      targetRect.top - containerRect.top + container.scrollTop - container.clientHeight / 2 + targetRect.height / 2;
+
+    try {
+      container.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    } catch {
+      container.scrollTop = Math.max(0, top);
     }
   };
 
@@ -436,7 +746,7 @@ export default function VideoPlayer() {
   };
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    window.requestAnimationFrame(() => scrollChatToBottom("smooth"));
   }, [messages.length, isTyping]);
 
   const renderChatPanel = ({ scrollHeightClass, variant }) => {
@@ -489,7 +799,7 @@ export default function VideoPlayer() {
         </div>
       </div>
 
-      <ScrollArea className={`${scrollHeightClass} px-4 py-4`}>
+      <div ref={chatScrollRef} className={`${scrollHeightClass} overflow-y-auto px-4 py-4`}>
         <div className="space-y-4">
           {messages.length === 0 && !isTyping && (
             <div className="text-center py-8">
@@ -497,34 +807,48 @@ export default function VideoPlayer() {
               <p className="text-gray-400 text-sm">Ask questions about the lecture</p>
             </div>
           )}
-          {messages.map((msg, index) => (
-            <motion.div
-              key={`${msg.role}-${index}`}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-            >
-              <div className="max-w-[85%]">
-                <div
-                  className={`rounded-2xl px-4 py-2 ${
-                    msg.role === "user"
-                      ? "bg-gradient-to-r from-pink-500 via-purple-500 to-blue-500 text-white"
-                      : "glass-card text-gray-100"
-                  }`}
-                >
-                  {msg.role === "assistant" ? (
-                    <div className="text-sm leading-relaxed">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                        {String(linkifySummaryTimestamps(msg.content || "") || "")}
-                      </ReactMarkdown>
-                    </div>
-                  ) : (
-                    <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                  )}
+          {messages.map((msg, index) => {
+            const messageKey = String(index);
+            const assistantMarkdown = rewriteCitationAnchors(
+              String(linkifySummaryTimestamps(msg.content || "") || ""),
+              messageKey
+            );
+
+            return (
+              <motion.div
+                key={`${msg.role}-${index}`}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+              >
+                <div className="max-w-[85%]">
+                  <div
+                    className={`rounded-2xl px-4 py-2 ${
+                      msg.role === "user"
+                        ? "bg-gradient-to-r from-pink-500 via-purple-500 to-blue-500 text-white"
+                        : "glass-card text-gray-100"
+                    }`}
+                  >
+                    {msg.role === "assistant" ? (
+                      <div className="text-sm leading-relaxed">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                          {assistantMarkdown}
+                        </ReactMarkdown>
+                        <VideoChatSources
+                          citations={msg.citations}
+                          messageKey={messageKey}
+                          currentContentId={contentId}
+                          onSeekToSeconds={seekAndScrollToSeconds}
+                        />
+                      </div>
+                    ) : (
+                      <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                    )}
+                  </div>
                 </div>
-              </div>
-            </motion.div>
-          ))}
+              </motion.div>
+            );
+          })}
           {isTyping && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex justify-start">
               <div className="glass-card rounded-2xl px-4 py-2">
@@ -534,7 +858,7 @@ export default function VideoPlayer() {
           )}
           <div ref={messagesEndRef} />
         </div>
-      </ScrollArea>
+      </div>
 
       <div className="p-4 border-t border-white/5 shrink-0">
         <div className="glass-card rounded-xl p-2 flex items-end gap-2">
