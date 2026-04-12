@@ -32,7 +32,7 @@ async def _build_video_transcript_context(
     course_id: UUID,
     content_id: UUID | None,
     video_asset_id: UUID,
-    max_chars: int = 14000,
+    max_chars: int = 200000,
 ) -> str:
     """
     Build a compact (but richer-than-UI) transcript context for server-side summarization.
@@ -109,7 +109,7 @@ async def generate_and_store_video_asset_summary(
         course_id=asset.course_id,
         content_id=asset.content_id,
         video_asset_id=asset.id,
-        max_chars=14000,
+        max_chars=200000,
     )
     if "Transcript (timestamped):" not in ctx:
         if force or asset.ai_summary is None:

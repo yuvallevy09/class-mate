@@ -67,8 +67,6 @@ def generate_chapters_dspy(*, settings: Settings, blocks: list[dict[str, Any]]) 
         s = float(b.get("start_sec", 0.0))
         e = float(b.get("end_sec", 0.0))
         t = str(b.get("text", "") or "").strip().replace("\n", " ")
-        if len(t) > 380:
-            t = t[:380].rstrip() + "…"
         lines.append(f"[b{i}] {s:.1f}-{e:.1f} {t}")
 
     prompt_blocks = "\n".join(lines).strip()
