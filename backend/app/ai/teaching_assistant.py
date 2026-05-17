@@ -4,6 +4,11 @@ from typing import Literal
 
 import dspy
 
+from app.rag.explicit_retrieve import (
+    TARGET_LECTURE_SLUG_DESC,
+    TARGET_TIMESTAMP_DESC,
+)
+
 
 # --- Signatures ---
 
@@ -46,9 +51,8 @@ class GenerateRetrievalDetails(dspy.Signature):
     lecture_routing: list[str] = dspy.OutputField(
         desc="A list of lecture_ids that may contain information relevant to the user's query. Usually not more than one."
     )
-    lecture_and_timestamp: str = dspy.OutputField(
-        desc="If the user asked about a specific timestamp, extract it in this format:    . Otherwise return an empty string."
-    )
+    target_lecture_slug: str | None = dspy.OutputField(desc=TARGET_LECTURE_SLUG_DESC)
+    target_timestamp: str | None = dspy.OutputField(desc=TARGET_TIMESTAMP_DESC)
 
 
 class AnswerFromContext(dspy.Signature):
@@ -111,20 +115,26 @@ class TeachingAssistant(dspy.Module):
 
             retrieved_docs = ""
 
-            if search_params.lecture_and_timestamp:
-                retrieved_docs = retrieve_explicitly(search_params.lecture_and_timestamp)
+            if search_params.target_lecture_slug and search_params.target_timestamp:
+                retrieved_docs = retrieve_explicitly(
+                    search_params.target_lecture_slug,
+                    search_params.target_timestamp,
+                )
 
             # If explicit retrieval failed or no timestamp was provided, fall back to routing logic
             if not retrieved_docs:
-                lecture_ids = search_params.lecture_routing
-                lecture_text, is_long = get_lecture_text(lecture_ids)
+                lecture_slugs = search_params.lecture_routing
+                lecture_docs, is_long = get_lecture_text(lecture_slugs=lecture_slugs)
 
                 if is_long:
                     # Perform hybrid search -> chunked docs
-                    retrieved_docs = perform_hybrid_search(search_params.contextualized_query, lecture_ids)
+                    retrieved_docs = perform_hybrid_search(
+                        search_params.contextualized_query,
+                        lecture_slugs,
+                    )
                 else:
                     # Bypass chunking: entire lecture transcripts are the context
-                    retrieved_docs = lecture_texts
+                    retrieved_docs = lecture_docs
 
             # Step 4: Final Generation
             return self.answer_from_context(
