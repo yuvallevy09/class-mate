@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from cachetools import TTLCache
+from cachetools.keys import hashkey
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +12,87 @@ from app.db.models.course_content import CourseContent
 from app.db.models.video_asset import VideoAsset
 from app.db.models.video_chapter import VideoChapter
 from app.schemas.course_info import CourseInfo, Lecture, LectureChapter
+
+
+# --- TTL cache ---
+#
+# `build_course_info` is hit on every chat turn (once `TeachingAssistant` is
+# wired into the endpoint). The output only changes when lectures/contents/
+# chapters/AI titles/summaries change — i.e. on uploads, transcript ingestion,
+# and explicit edits. Within a typical chat session (a few minutes) the catalog
+# is effectively immutable.
+#
+# A 5-minute TTL gives us:
+#   - high hit rate within a chat session,
+#   - cheap-enough first call (one DB join + one chapter query),
+#   - bounded staleness when new lectures land mid-conversation (worst case 5min).
+#
+# Mutation sites should call `invalidate_course_info_cache(course_id)` to drop
+# stale entries proactively. The TTL is the safety net for cases we miss.
+#
+# Thread/process notes:
+#   - asyncio single-threaded workers are safe under the GIL: even a racy
+#     get-then-set yields "last write wins" with identical values.
+#   - Multi-process workers (uvicorn --workers N) each get their own cache.
+#     Eventually consistent across workers within the TTL window — acceptable.
+DEFAULT_COURSE_INFO_CACHE_TTL_SEC = 300  # 5 minutes
+DEFAULT_COURSE_INFO_CACHE_MAXSIZE = 512
+_COURSE_INFO_CACHE: TTLCache = TTLCache(
+    maxsize=DEFAULT_COURSE_INFO_CACHE_MAXSIZE,
+    ttl=DEFAULT_COURSE_INFO_CACHE_TTL_SEC,
+)
+
+
+def _cache_key(course_id: UUID, *, include_chapters: bool) -> tuple:
+    """Stable cache key. `include_chapters` is part of the key because it
+    materially changes the returned object (no chapters vs full chapters)."""
+    return hashkey(str(course_id), bool(include_chapters))
+
+
+def invalidate_course_info_cache(course_id: UUID | str) -> None:
+    """Drop both cached variants (`include_chapters` True/False) for a course.
+
+    Call this from any code path that mutates data feeding into `CourseInfo`:
+    creating/deleting `CourseContent` or `VideoAsset`, ingesting transcripts
+    (flipping `transcript_ready`), creating `VideoChapter` rows, updating
+    `ai_title` / `ai_summary`, renaming the course, etc.
+
+    Safe to call with a UUID or its string form. No-op when the key is absent.
+    """
+    cid = course_id if isinstance(course_id, UUID) else UUID(str(course_id))
+    for include_chapters in (True, False):
+        _COURSE_INFO_CACHE.pop(_cache_key(cid, include_chapters=include_chapters), None)
+
+
+def clear_course_info_cache() -> None:
+    """Drop every cached entry. Intended for tests; harmless in production."""
+    _COURSE_INFO_CACHE.clear()
+
+
+async def build_course_info_cached(
+    *,
+    db: AsyncSession,
+    course: Course,
+    include_chapters: bool = True,
+) -> CourseInfo:
+    """Cached variant of `build_course_info` with a TTL.
+
+    See `build_course_info` for behavior. Cache misses delegate to the
+    uncached builder and store the result; cache hits return immediately
+    without touching the DB.
+
+    When in doubt about freshness, call `invalidate_course_info_cache(course.id)`
+    after mutating any of the underlying tables.
+    """
+    key = _cache_key(course.id, include_chapters=include_chapters)
+    cached = _COURSE_INFO_CACHE.get(key)
+    if cached is not None:
+        return cached
+    info = await build_course_info(
+        db=db, course=course, include_chapters=include_chapters
+    )
+    _COURSE_INFO_CACHE[key] = info
+    return info
 
 
 def _pick_lecture_title(*, asset: VideoAsset, content: CourseContent | None) -> str:

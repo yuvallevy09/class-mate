@@ -76,12 +76,17 @@ def _normalize_slug(token: str | None) -> str | None:
 def _find_chapter_at(chapters: list[LectureChapter], ts: float) -> LectureChapter | None:
     """Return the chapter whose [start_sec, end_sec) contains `ts`.
 
+    Half-open on the end so adjacent chapters (A ends at 600.0, B starts at
+    600.0) attribute `ts=600.0` to B, matching the natural reading of "this
+    is where the next chapter begins". Matches `_load_segments_in_range`,
+    which is also half-open.
+
     When chapters overlap (shouldn't happen, but doesn't hurt to be defensive),
     prefer the lowest `chapter_index` so behavior is deterministic.
     """
     best: LectureChapter | None = None
     for ch in chapters:
-        if ch.start_sec <= ts <= ch.end_sec:
+        if ch.start_sec <= ts < ch.end_sec:
             if best is None or ch.chapter_index < best.chapter_index:
                 best = ch
     return best
