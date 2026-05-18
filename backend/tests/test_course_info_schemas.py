@@ -94,7 +94,8 @@ def test_to_prompt_string_contains_core_metadata() -> None:
 
     assert "Course: Computer Networks" in text
     assert "Description: Intro to networking." in text
-    assert "[L1] Intro to Networking" in text
+    assert "L1: Intro to Networking" in text
+    assert "[L1]" not in text  # brackets reserved for the [N] citation namespace
     assert "description: Course overview." in text
     assert "summary: This lecture introduces the OSI model." in text
     assert "0:00–5:13 Welcome" in text

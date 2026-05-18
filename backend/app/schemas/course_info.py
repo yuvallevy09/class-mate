@@ -87,7 +87,12 @@ class Lecture(BaseModel):
         summary_max_chars: int = 1200,
     ) -> str:
         lines: list[str] = []
-        head = f"[{self.slug}] {self.title}"
+        # Use `slug: title` (no brackets) so the slug doesn't collide with the
+        # bracketed `[N]` citation namespace used by `retrieved_docs` in
+        # `AnswerFromContext`. Models were grabbing `[L1]` as a citation key
+        # and the digit-only regex in `_format_reply_with_citation_links`
+        # couldn't rewrite it, leaving the slug as plain text.
+        head = f"{self.slug}: {self.title}"
         if self.duration_sec is not None:
             head += f" (~{_fmt_timestamp(self.duration_sec)})"
         if not self.transcript_ready:

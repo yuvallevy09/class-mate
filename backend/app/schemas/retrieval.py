@@ -61,6 +61,15 @@ class RetrievedDoc(BaseModel):
             time_label = f" ({_fmt_timestamp(self.start_sec)})"
         return " · ".join(parts) + time_label
 
-    def to_prompt_string(self) -> str:
-        """Compact rendering for inclusion as one element in `list[str] retrieved_docs`."""
-        return f"[Source: {self.source_label}]\n{self.text}".strip()
+    def to_prompt_string(self, *, index: int | None = None) -> str:
+        """Compact rendering for inclusion as one element in `list[str] retrieved_docs`.
+
+        When `index` is supplied, prefixes the rendering with `[N]` so the LLM
+        has a stable citation key it can echo back inline (`...as discussed [1]`).
+        The endpoint reuses this same 1-based ordering when building
+        `ChatCitation`s, so the post-processor in
+        `_format_reply_with_citation_links` can rewrite `[N]` into a clickable
+        superscript that anchors to the matching Sources entry.
+        """
+        prefix = f"[{int(index)}] " if index is not None else ""
+        return f"{prefix}[Source: {self.source_label}]\n{self.text}".strip()

@@ -28,6 +28,8 @@ import dspy
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.dspy_chat import _effective_gemini_api_key, _litellm_gemini_model
+from app.core.settings import Settings, get_settings
 from app.rag.course_retriever import CourseRetriever, RetrievalPath
 from app.rag.explicit_retrieve import (
     TARGET_LECTURE_SLUG_DESC,
@@ -36,6 +38,12 @@ from app.rag.explicit_retrieve import (
 from app.schemas.conversation_history import ConversationHistory
 from app.schemas.course_info import CourseInfo
 from app.schemas.retrieval import RetrievedDoc
+
+
+# Generous default so structured-output signatures (especially the long
+# answer-from-context one) aren't truncated mid-JSON. The router and clarifier
+# would do fine with less, but using a single budget keeps the LM builder simple.
+_DEFAULT_MAX_TOKENS = 2048
 
 
 Route = Literal["answer", "retrieve", "clarify"]
@@ -108,14 +116,34 @@ class AnswerFromContext(dspy.Signature):
     conversation_history: str = dspy.InputField()
     user_query: str = dspy.InputField()
     retrieved_docs: list[str] = dspy.InputField(
-        desc="Relevant snippets, timestamps, or full transcripts from the lectures."
+        desc=(
+            "Relevant snippets, timestamps, or full transcripts from the lectures. "
+            "Each entry begins with a NUMERIC citation key in square brackets — "
+            "'[1]', '[2]', '[3]', ... — followed by '[Source: ...]' metadata and "
+            "the text. Use ONLY the numeric key when citing in `answer`."
+        )
     )
 
     answer: str = dspy.OutputField(
         desc=(
-            "Respond to the student with a direct answer (including appropriate "
-            "citations and formatting). If you don't have enough information to "
-            "answer with confidence, be honest and state what information is missing."
+            "Direct, helpful answer to the student.\n\n"
+            "CITATION RULES (strict — the post-processor depends on this):\n"
+            "1. To cite a retrieved doc, write its NUMERIC key in square "
+            "brackets immediately after the claim it supports. "
+            "Examples: '[1]', '[2]', '[1][3]'.\n"
+            "2. Citation keys are DIGITS ONLY. Do NOT cite by lecture slug. "
+            "WRONG: '[L1]', '[L2]', '[Lecture 1]'. RIGHT: '[1]', '[2]'.\n"
+            "3. Do NOT write raw timestamps like '#0:08' or '(0:04)' — the "
+            "numeric citation already links to the exact video moment.\n"
+            "4. Do NOT echo the '[Source: ...]' metadata block in your answer; "
+            "it's for your reference only.\n"
+            "5. Do NOT invent citation numbers that aren't in `retrieved_docs`.\n\n"
+            "Good example: 'Serverless is an architecture where the cloud "
+            "provider chooses the hardware and handles scaling [1].'\n"
+            "Bad example: 'You can find this discussion in [L1] Json Title "
+            "Server vs Serverless (0:04).'\n\n"
+            "If `retrieved_docs` is insufficient to answer confidently, say so "
+            "and state what's missing instead of guessing."
         )
     )
 
@@ -177,16 +205,45 @@ class TeachingAssistant(dspy.Module):
 
     Inject a `CourseRetriever` so this module is DB-agnostic and trivial to
     unit-test (pass a mock retriever that returns canned `RetrievedDoc`s).
+
+    The LM is built lazily from `Settings` on first use and reused across
+    requests; tests can short-circuit this by passing a pre-built `lm` (e.g.
+    a DSPy `DummyLM`) to the constructor.
     """
 
-    def __init__(self, *, retriever: CourseRetriever) -> None:
+    def __init__(
+        self,
+        *,
+        retriever: CourseRetriever,
+        lm: dspy.LM | None = None,
+    ) -> None:
         super().__init__()
         self._retriever = retriever
+        self._lm: dspy.LM | None = lm
         self.router = dspy.ChainOfThought(RouteQuery)
         self.query_generator = dspy.ChainOfThought(GenerateRetrievalDetails)
         self.clarifier = dspy.Predict(AskClarification)
         self.answer_without_context = dspy.ChainOfThought(AnswerWithoutContext)
         self.answer_from_context = dspy.ChainOfThought(AnswerFromContext)
+
+    def _get_lm(self) -> dspy.LM:
+        """Lazy-build the LM from `Settings` and cache on the instance.
+
+        Built once on first call (per process via the module singleton) so we
+        don't recreate the LiteLLM client on every chat turn. `Settings` is
+        read at first use rather than at construction time to keep import-time
+        side effects minimal (handy in tests).
+        """
+        if self._lm is None:
+            settings: Settings = get_settings()
+            _effective_gemini_api_key(settings)  # fails fast if the key is missing
+            self._lm = dspy.LM(
+                model=_litellm_gemini_model(settings.gemini_model),
+                temperature=float(settings.chat_temperature),
+                max_tokens=_DEFAULT_MAX_TOKENS,
+                num_retries=2,
+            )
+        return self._lm
 
     async def aforward(
         self,
@@ -273,7 +330,13 @@ class TeachingAssistant(dspy.Module):
                 debug=debug,
             )
 
-        rendered_docs = [d.to_prompt_string() for d in decision.docs]
+        # 1-based indexing aligns with `_format_reply_with_citation_links`,
+        # which numbers citations from 1 in the order they appear in the
+        # response's `citations` array (built from these same docs in
+        # `chat_v2._docs_to_citations`).
+        rendered_docs = [
+            d.to_prompt_string(index=i) for i, d in enumerate(decision.docs, start=1)
+        ]
         answer = await asyncio.to_thread(
             self._answer_with_ctx,
             course_info=ci_str,
@@ -291,6 +354,11 @@ class TeachingAssistant(dspy.Module):
 
     # --- Thin sync wrappers so `aforward` can dispatch them via `asyncio.to_thread`. ---
 
+    # Each helper binds the LM via `dspy.settings.context(lm=...)` so the
+    # configuration is set in the worker thread where the DSPy call actually
+    # runs (cf. `asyncio.to_thread` in `aforward`). This sidesteps any
+    # thread-local vs contextvar differences between DSPy versions.
+
     def _route_raw(
         self,
         *,
@@ -302,11 +370,12 @@ class TeachingAssistant(dspy.Module):
         both `route` and `reasoning`. Label normalization is done by the
         caller via `_normalize_route`.
         """
-        return self.router(
-            course_info=course_info,
-            conversation_history=conversation_history,
-            user_query=user_query,
-        )
+        with dspy.settings.context(lm=self._get_lm()):
+            return self.router(
+                course_info=course_info,
+                conversation_history=conversation_history,
+                user_query=user_query,
+            )
 
     def _clarify(
         self,
@@ -315,14 +384,13 @@ class TeachingAssistant(dspy.Module):
         conversation_history: str,
         user_query: str,
     ) -> str:
-        return str(
-            self.clarifier(
+        with dspy.settings.context(lm=self._get_lm()):
+            pred = self.clarifier(
                 course_info=course_info,
                 conversation_history=conversation_history,
                 user_query=user_query,
-            ).clarification
-            or ""
-        ).strip()
+            )
+        return str(pred.clarification or "").strip()
 
     def _answer_no_ctx(
         self,
@@ -331,14 +399,13 @@ class TeachingAssistant(dspy.Module):
         conversation_history: str,
         user_query: str,
     ) -> str:
-        return str(
-            self.answer_without_context(
+        with dspy.settings.context(lm=self._get_lm()):
+            pred = self.answer_without_context(
                 course_info=course_info,
                 conversation_history=conversation_history,
                 user_query=user_query,
-            ).answer
-            or ""
-        ).strip()
+            )
+        return str(pred.answer or "").strip()
 
     def _gen_retrieval_params(
         self,
@@ -347,11 +414,12 @@ class TeachingAssistant(dspy.Module):
         conversation_history: str,
         user_query: str,
     ) -> dspy.Prediction:
-        return self.query_generator(
-            course_info=course_info,
-            conversation_history=conversation_history,
-            user_query=user_query,
-        )
+        with dspy.settings.context(lm=self._get_lm()):
+            return self.query_generator(
+                course_info=course_info,
+                conversation_history=conversation_history,
+                user_query=user_query,
+            )
 
     def _answer_with_ctx(
         self,
@@ -361,15 +429,14 @@ class TeachingAssistant(dspy.Module):
         user_query: str,
         retrieved_docs: list[str],
     ) -> str:
-        return str(
-            self.answer_from_context(
+        with dspy.settings.context(lm=self._get_lm()):
+            pred = self.answer_from_context(
                 course_info=course_info,
                 conversation_history=conversation_history,
                 user_query=user_query,
                 retrieved_docs=retrieved_docs,
-            ).answer
-            or ""
-        ).strip()
+            )
+        return str(pred.answer or "").strip()
 
 
 # --- Process-level singleton ---

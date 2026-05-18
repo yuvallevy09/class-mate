@@ -470,5 +470,9 @@ async def test_retrieve_explicitly_source_label_and_prompt_string() -> None:
             prompt = doc.to_prompt_string()
             assert prompt.startswith("[Source: ")
             assert "[0:10] hello students" in prompt
+
+            indexed = doc.to_prompt_string(index=3)
+            assert indexed.startswith("[3] [Source: "), indexed
+            assert "[0:10] hello students" in indexed
     finally:
         await engine.dispose()

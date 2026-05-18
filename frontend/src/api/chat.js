@@ -13,7 +13,7 @@ export async function listConversationMessages(conversationId) {
 export async function sendCourseChat({ courseId, message, conversationId = null } = {}) {
   if (!courseId) throw new Error("courseId is required");
   if (!message || !String(message).trim()) throw new Error("message is required");
-  return request(`/api/v1/courses/${encodeURIComponent(courseId)}/chat`, {
+  return request(`/api/v1/courses/${encodeURIComponent(courseId)}/chat-v2`, {
     method: "POST",
     body: { message: String(message), conversationId: conversationId ?? null },
   });
