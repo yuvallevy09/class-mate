@@ -21,7 +21,7 @@ from app.db.models.video_asset import VideoAsset
 from app.db.session import get_session_maker
 from app.services.video_chapters import chapterize_or_fallback
 from app.services.transcript_chunk_ingestion import ingest_video_asset_transcript_to_chunks
-from app.services.video_summary import generate_and_store_video_asset_summary
+from app.services.lecture_artifacts import generate_and_store_lecture_artifacts
 
 
 @dataclass(frozen=True)
@@ -430,14 +430,18 @@ async def transcribe_video_asset(*, video_asset_id: UUID, requested_language: st
                 asset.transcription_completed_at = now
                 await db.commit()
 
-                # Best-effort: generate and persist an AI summary once we have transcript segments.
-                # This is intentionally decoupled from indexing/embeddings success: even if indexing
-                # fails, we still want a usable summary.
+                # Best-effort: generate and persist AI artifacts (title/description/summary)
+                # once we have transcript segments. This is intentionally decoupled from
+                # indexing/embeddings success: even if indexing fails, we still want them.
                 try:
-                    # Refresh in case another worker already wrote it.
+                    # Refresh in case another worker already wrote them.
                     await db.refresh(asset)
-                    if asset.ai_summary is None or getattr(asset, "ai_title", None) is None:
-                        await generate_and_store_video_asset_summary(
+                    if (
+                        asset.ai_summary is None
+                        or getattr(asset, "ai_title", None) is None
+                        or getattr(asset, "ai_description", None) is None
+                    ):
+                        await generate_and_store_lecture_artifacts(
                             db=db,
                             settings=settings,
                             video_asset_id=asset.id,

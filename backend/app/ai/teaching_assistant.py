@@ -61,9 +61,9 @@ class RouteQuery(dspy.Signature):
 
     route: Route = dspy.OutputField(
         desc=(
-            "'answer' if the query can be answered from general knowledge / history / "
-            "course context; 'retrieve' if answering requires specific details from "
-            "lecture transcripts; 'clarify' if the user query is ambiguous."
+            "'answer' if the query can be answered from general knowledge;"
+            "'retrieve' if answering requires specific details from lecture transcripts;"
+            "'clarify' if the user query is ambiguous."
         )
     )
 

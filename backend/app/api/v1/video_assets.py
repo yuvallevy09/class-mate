@@ -23,7 +23,7 @@ from app.schemas.course_content import CourseContentPublic
 from app.schemas.video_chapter import VideoChapterPublic
 from app.schemas.video_asset import VideoAssetCreate, VideoAssetPublic
 from app.services.transcription import transcribe_video_asset
-from app.services.video_summary import generate_and_store_video_asset_summary
+from app.services.lecture_artifacts import generate_and_store_lecture_artifacts
 
 router = APIRouter(tags=["video-assets"])
 
@@ -62,6 +62,9 @@ class VideoAssetSummaryPublic(BaseModel):
     ai_title: str | None = Field(default=None, serialization_alias="aiTitle")
     ai_title_generated_at: datetime | None = Field(default=None, serialization_alias="aiTitleGeneratedAt")
     ai_title_error: str | None = Field(default=None, serialization_alias="aiTitleError")
+    ai_description: str | None = Field(default=None, serialization_alias="aiDescription")
+    ai_description_generated_at: datetime | None = Field(default=None, serialization_alias="aiDescriptionGeneratedAt")
+    ai_description_error: str | None = Field(default=None, serialization_alias="aiDescriptionError")
     ai_summary: str | None = Field(default=None, serialization_alias="aiSummary")
     ai_summary_generated_at: datetime | None = Field(default=None, serialization_alias="aiSummaryGeneratedAt")
     ai_summary_error: str | None = Field(default=None, serialization_alias="aiSummaryError")
@@ -450,13 +453,17 @@ async def get_video_asset_summary(
 
     # If missing but transcript exists (e.g. older assets), best-effort backfill on first request.
     # This keeps the UX stable: once generated, all future visits reuse the stored summary.
-    if (not asset.ai_summary or getattr(asset, "ai_title", None) is None) and asset.status in {
+    if (
+        not asset.ai_summary
+        or getattr(asset, "ai_title", None) is None
+        or getattr(asset, "ai_description", None) is None
+    ) and asset.status in {
         "done",
         "done_no_embeddings",
         "done_no_index",
     }:
         try:
-            await generate_and_store_video_asset_summary(
+            await generate_and_store_lecture_artifacts(
                 db=db,
                 settings=settings,
                 video_asset_id=asset.id,
@@ -473,6 +480,9 @@ async def get_video_asset_summary(
         ai_title=getattr(asset, "ai_title", None),
         ai_title_generated_at=getattr(asset, "ai_title_generated_at", None),
         ai_title_error=getattr(asset, "ai_title_error", None),
+        ai_description=getattr(asset, "ai_description", None),
+        ai_description_generated_at=getattr(asset, "ai_description_generated_at", None),
+        ai_description_error=getattr(asset, "ai_description_error", None),
         ai_summary=asset.ai_summary,
         ai_summary_generated_at=asset.ai_summary_generated_at,
         ai_summary_error=asset.ai_summary_error,
