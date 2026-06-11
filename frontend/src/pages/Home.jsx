@@ -97,8 +97,8 @@ export default function Home() {
             {[
               {
                 icon: BookOpen,
-                title: "Organize Content",
-                description: "Upload notes, exams, and resources in one place"
+                title: "Lecture Videos",
+                description: "Upload your lecture videos in one place"
               },
               {
                 icon: Brain,

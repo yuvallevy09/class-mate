@@ -23,11 +23,7 @@ import CourseSidebar from "@/components/CourseSidebar";
 
 const CATEGORY_LABELS = {
   overview: "Overview",
-  media: "Videos",
-  notes: "Slides & Notes",
-  exams: "Exams",
-  assignments: "Assignments",
-  additional_resources: "Additional Resources",
+  media: "Lecture Videos",
 };
 
 const FILE_ICONS = {
@@ -41,20 +37,7 @@ export default function CourseContent() {
   const navigate = useNavigate();
   const urlParams = new URLSearchParams(window.location.search);
   const courseId = urlParams.get("courseId");
-  const rawCategory = urlParams.get("category");
-  // Clean canonical categories: rewrite legacy bookmark values in the URL (client-side only).
-  const category = useMemo(() => {
-    const c = String(rawCategory || "");
-    if (c === "past_exams") return "exams";
-    if (c === "past_assignments") return "assignments";
-    return c;
-  }, [rawCategory]);
-  if (rawCategory && category && rawCategory !== category) {
-    const next = new URLSearchParams(window.location.search);
-    next.set("category", category);
-    const nextUrl = `${window.location.pathname}?${next.toString()}`;
-    window.history.replaceState({}, "", nextUrl);
-  }
+  const category = urlParams.get("category");
   const isVideosPage = category === "media";
   const videoUploadMaxSizeMb = Number(import.meta?.env?.VITE_UPLOAD_MAX_SIZE_MB) || 100;
   

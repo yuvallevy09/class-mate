@@ -9,10 +9,6 @@ import {
   MessageSquarePlus,
   BookOpen,
   Video,
-  FileQuestion,
-  ClipboardList,
-  FolderOpen,
-  FileText,
 } from "lucide-react";
 
 import { createPageUrl } from "@/utils";
@@ -20,13 +16,9 @@ import { deleteConversation, listCourseConversations } from "@/api/chat";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
-export const COURSE_SIDEBAR_ITEMS = [
+const COURSE_SIDEBAR_ITEMS = [
   { id: "overview", label: "Overview", icon: BookOpen },
-  { id: "media", label: "Videos", icon: Video },
-  { id: "notes", label: "Slides & Notes", icon: FileText },
-  { id: "assignments", label: "Assignments", icon: ClipboardList },
-  { id: "exams", label: "Exams", icon: FileQuestion },
-  { id: "additional_resources", label: "Additional Resources", icon: FolderOpen },
+  { id: "media", label: "Lecture Videos", icon: Video },
 ];
 
 export default function CourseSidebar({
@@ -122,24 +114,6 @@ export default function CourseSidebar({
 
             <ScrollArea className="h-[calc(100%-73px)]">
               <div className="p-4 space-y-6">
-                {/* Chat */}
-                <div>
-                  <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 px-2">
-                    Chat
-                  </h3>
-                  <div className="space-y-2">
-                    <button type="button" onClick={handleNewChat} className="w-full">
-                      <motion.div
-                        whileHover={{ x: 4 }}
-                        className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-gray-300 hover:text-white hover:bg-white/5 transition-colors"
-                      >
-                        <MessageSquarePlus className="w-5 h-5 text-purple-400" />
-                        <span className="text-sm font-medium">New Chat</span>
-                      </motion.div>
-                    </button>
-                  </div>
-                </div>
-
                 {/* Course Content */}
                 <div>
                   <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 px-2">
@@ -185,6 +159,24 @@ export default function CourseSidebar({
                         </Link>
                       );
                     })}
+                  </div>
+                </div>
+
+                {/* Chat */}
+                <div>
+                  <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 px-2">
+                    Chat
+                  </h3>
+                  <div className="space-y-2">
+                    <button type="button" onClick={handleNewChat} className="w-full">
+                      <motion.div
+                        whileHover={{ x: 4 }}
+                        className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-gray-300 hover:text-white hover:bg-white/5 transition-colors"
+                      >
+                        <MessageSquarePlus className="w-5 h-5 text-purple-400" />
+                        <span className="text-sm font-medium">New Chat</span>
+                      </motion.div>
+                    </button>
                   </div>
                 </div>
 
