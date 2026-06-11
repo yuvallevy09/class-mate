@@ -884,7 +884,7 @@ export default function VideoPlayer() {
           {/* Main Content */}
           <div className="flex-1 flex flex-col px-6 lg:px-8 overflow-y-auto">
             <div className="glass-card rounded-2xl overflow-hidden mb-6">
-              <div className="relative w-full aspect-video bg-black">
+              <div className="relative w-full bg-black aspect-video lg:aspect-auto lg:h-[520px]">
                 <video
                   ref={videoRef}
                   key={videoUrl || "video"}
@@ -994,7 +994,7 @@ export default function VideoPlayer() {
                 animate={{ x: 0 }}
                 exit={{ x: "100%" }}
                 transition={{ type: "spring", damping: 25, stiffness: 300 }}
-                className="w-full lg:w-[380px] flex flex-col gap-4 px-4 pb-4 pt-0"
+                className="w-full lg:w-[380px] flex flex-col gap-6 px-4 pb-4 pt-0"
               >
                 {/* Transcript */}
                 <AnimatePresence>
@@ -1005,6 +1005,7 @@ export default function VideoPlayer() {
                       exit={{ height: 0, opacity: 0 }}
                       className="glass-card rounded-2xl overflow-hidden"
                     >
+                      <div className="flex flex-col lg:h-[520px]">
                       <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0">
                         <div className="flex items-center gap-2">
                           <FileText className="w-5 h-5 text-purple-400" />
@@ -1019,7 +1020,7 @@ export default function VideoPlayer() {
                           <X className="w-5 h-5" />
                         </Button>
                       </div>
-                      <ScrollArea className="h-[455px] px-4 py-2">
+                      <ScrollArea className="h-[455px] lg:h-auto lg:flex-1 min-h-0 px-4 py-2">
                         {Array.isArray(transcriptSegments) && transcriptSegments.length ? (
                           <div className="space-y-2">
                             {transcriptSegments.map((seg) => (
@@ -1042,6 +1043,7 @@ export default function VideoPlayer() {
                           </div>
                         )}
                       </ScrollArea>
+                      </div>
                     </motion.div>
                   )}
                 </AnimatePresence>
