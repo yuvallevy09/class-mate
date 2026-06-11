@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
   Video,
-  MessageSquarePlus,
   ChevronDown,
   ChevronUp,
   Loader2,
@@ -148,28 +147,25 @@ function LectureRow({ lecture, index, courseId }) {
         {String(index + 1).padStart(2, "0")}
       </div>
 
-      <div
-        className={`flex-1 glass-card rounded-2xl p-5 transition-all duration-300 ${
-          isProcessing
-            ? "opacity-70"
-            : "cursor-pointer hover:border-purple-500/30 hover:neon-glow"
-        }`}
-      >
-        {isProcessing ? (
-          <div>
-            <div className="flex items-center justify-between gap-3 mb-3">
-              <h3 className="font-semibold text-gray-300">{lecture.title}</h3>
-              <span className="inline-flex items-center gap-2 text-xs text-purple-300 shrink-0">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                Generating description…
-              </span>
-            </div>
-            <div className="space-y-2 animate-pulse">
-              <div className="h-3.5 bg-white/10 rounded w-full" />
-              <div className="h-3.5 bg-white/5 rounded w-3/4" />
-            </div>
+      {isProcessing ? (
+        <div className="flex-1 glass-card rounded-2xl p-5 opacity-70">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <h3 className="font-semibold text-gray-300">{lecture.title}</h3>
+            <span className="inline-flex items-center gap-2 text-xs text-purple-300 shrink-0">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              Generating description…
+            </span>
           </div>
-        ) : (
+          <div className="space-y-2 animate-pulse">
+            <div className="h-3.5 bg-white/10 rounded w-full" />
+            <div className="h-3.5 bg-white/5 rounded w-3/4" />
+          </div>
+        </div>
+      ) : (
+        <Link
+          to={createPageUrl(`VideoPlayer?courseId=${courseId}&contentId=${lecture.id}`)}
+          className="flex-1 glass-card rounded-2xl p-5 transition-all duration-300 hover:border-purple-500/30 hover:neon-glow block"
+        >
           <div className="flex items-start gap-4">
             <div className="flex-1 min-w-0">
               <h3 className="font-semibold mb-1.5 group-hover:gradient-text transition-all">
@@ -178,24 +174,14 @@ function LectureRow({ lecture, index, courseId }) {
               <p className="text-sm text-gray-400 leading-relaxed mb-3">
                 {lecture.aiDescription || "No description yet."}
               </p>
-              <div className="flex items-center gap-4">
-                <span className="text-xs text-gray-500">{lecture.date}</span>
-                <Link
-                  to={createPageUrl(`CourseChat?id=${courseId}`)}
-                  onClick={(e) => e.stopPropagation()}
-                  className="inline-flex items-center gap-1.5 text-xs font-medium text-purple-400 opacity-0 group-hover:opacity-100 transition-opacity hover:text-purple-300"
-                >
-                  <MessageSquarePlus className="w-3.5 h-3.5" />
-                  Ask about this lecture
-                </Link>
-              </div>
+              <span className="text-xs text-gray-500">{lecture.date}</span>
             </div>
             <div className="hidden sm:flex w-28 h-16 rounded-lg bg-black/40 border border-white/5 items-center justify-center shrink-0">
               <Video className="w-5 h-5 text-gray-600" />
             </div>
           </div>
-        )}
-      </div>
+        </Link>
+      )}
     </motion.div>
   );
 }
@@ -341,7 +327,7 @@ export default function CourseOverview() {
                       size="sm"
                       className="text-gray-400 hover:text-white hover:bg-white/5 rounded-full"
                     >
-                      View all videos
+                      Manage lectures
                     </Button>
                   </Link>
                 </div>

@@ -152,7 +152,7 @@ export default function CourseSidebar({
                 {/* Chat */}
                 <div>
                   <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 px-2">
-                    Chat
+                    Ask ClassMate
                   </h3>
                   <div className="space-y-2">
                     <button type="button" onClick={handleNewChat} className="w-full">
