@@ -9,7 +9,6 @@ import {
   MessageSquare,
   Sparkles,
   X,
-  Edit3,
   Send,
   Loader2,
   Maximize2,
@@ -25,9 +24,7 @@ import Navbar from "@/components/Navbar";
 import CourseSidebar from "@/components/CourseSidebar";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { toast } from "@/components/ui/use-toast";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
-import RichTextEditor from "@/components/RichTextEditor";
 
 function fmtTimestamp(seconds) {
   const s = Math.max(0, Number(seconds || 0));
@@ -385,7 +382,6 @@ export default function VideoPlayer() {
   const [message, setMessage] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [messages, setMessages] = useState([]);
-  const [noteDoc, setNoteDoc] = useState(null);
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(true);
   const [isChatOpen, setIsChatOpen] = useState(true);
   const [isChatPopoutOpen, setIsChatPopoutOpen] = useState(false);
@@ -398,39 +394,6 @@ export default function VideoPlayer() {
   const videoRef = useRef(null);
   const chatWasOpenRef = useRef(false);
   const initialSeekDoneRef = useRef(false);
-
-  const noteStorageKey = useMemo(() => {
-    if (!courseId || !contentId) return null;
-    return `classmate:note:${courseId}:${contentId}`;
-  }, [courseId, contentId]);
-
-  useEffect(() => {
-    if (!noteStorageKey) return;
-    try {
-      const saved = window.localStorage.getItem(noteStorageKey);
-      if (!saved) return;
-      try {
-        const parsed = JSON.parse(saved);
-        if (parsed && typeof parsed === "object") {
-          setNoteDoc(parsed);
-          return;
-        }
-      } catch {
-        // Migrate legacy plain-text notes into TipTap JSON
-        setNoteDoc({
-          type: "doc",
-          content: [
-            {
-              type: "paragraph",
-              content: [{ type: "text", text: String(saved) }],
-            },
-          ],
-        });
-      }
-    } catch {
-      // ignore
-    }
-  }, [noteStorageKey]);
 
   const { data: content } = useQuery({
     queryKey: ["contentById", contentId],
@@ -490,22 +453,7 @@ export default function VideoPlayer() {
     setIsTyping(false);
     setMessages([]);
     setIsSummaryExpanded(true);
-    setNoteDoc(null);
   }, [courseId, contentId]);
-
-  const handleSaveNote = () => {
-    if (!noteStorageKey) return;
-    try {
-      const payload = noteDoc || { type: "doc", content: [{ type: "paragraph" }] };
-      window.localStorage.setItem(noteStorageKey, JSON.stringify(payload));
-      toast({ title: "Saved", description: "Your note was saved in this browser." });
-    } catch {
-      toast({
-        title: "Couldn’t save note",
-        description: "Your browser blocked local storage. Try a different browser setting.",
-      });
-    }
-  };
 
   const seekToSeconds = (seconds) => {
     const el = videoRef.current;
@@ -895,10 +843,10 @@ export default function VideoPlayer() {
 
       <Navbar onMenuClick={() => setIsSidebarOpen((v) => !v)} showMenu={true} />
 
-      <div className="flex-1 flex flex-col relative z-10">
+      <div className="flex-1 flex flex-col relative z-10 w-full max-w-7xl mx-auto">
         {/* Breadcrumbs (shared across main + sidebar so sidebar aligns with video) */}
         <div className="px-6 lg:px-8 pt-6 lg:pt-8">
-          <div className="max-w-6xl">
+          <div>
             <div className="mb-6 flex items-center gap-2 text-sm">
               <Link
                 to={createPageUrl(`CourseContent?courseId=${courseId}&category=media`)}
@@ -934,7 +882,7 @@ export default function VideoPlayer() {
           </div>
 
           {/* Main Content */}
-          <div className="flex-1 flex flex-col px-6 lg:px-8 overflow-y-auto max-w-6xl">
+          <div className="flex-1 flex flex-col px-6 lg:px-8 overflow-y-auto">
             <div className="glass-card rounded-2xl overflow-hidden mb-6">
               <div className="relative w-full aspect-video bg-black">
                 <video
@@ -950,102 +898,8 @@ export default function VideoPlayer() {
               </div>
             </div>
 
-            {/* My Notes */}
-            <div className="glass-card rounded-2xl p-6 flex flex-col h-[422px]">
-              <div className="flex items-center gap-2 mb-4 shrink-0">
-                <Edit3 className="w-5 h-5 text-purple-400" />
-                <h2 className="text-xl font-semibold">My Notes</h2>
-              </div>
-
-              <div className="flex-1 min-h-0">
-                <RichTextEditor
-                  initialContent={noteDoc}
-                  onChange={(doc) => setNoteDoc(doc)}
-                  placeholder="Write your notes here..."
-                />
-              </div>
-
-              <Button onClick={handleSaveNote} className="btn-gradient mt-4 w-full">
-                Save Note
-              </Button>
-            </div>
-          </div>
-
-          {/* Right Sidebar - Transcript & Chat */}
-          <AnimatePresence>
-            {(isTranscriptOpen || isChatOpen) && (
-              <motion.div
-                initial={{ x: "100%" }}
-                animate={{ x: 0 }}
-                exit={{ x: "100%" }}
-                transition={{ type: "spring", damping: 25, stiffness: 300 }}
-                className="w-full lg:w-[380px] flex flex-col gap-4 px-4 pb-4 pt-0"
-              >
-                {/* Transcript */}
-                <AnimatePresence>
-                  {isTranscriptOpen && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: "auto", opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      className="glass-card rounded-2xl overflow-hidden"
-                    >
-                      <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0">
-                        <div className="flex items-center gap-2">
-                          <FileText className="w-5 h-5 text-purple-400" />
-                          <h2 className="text-lg font-semibold">Transcript</h2>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => setIsTranscriptOpen(false)}
-                          className="text-gray-400 hover:text-white hover:bg-white/5"
-                        >
-                          <X className="w-5 h-5" />
-                        </Button>
-                      </div>
-                      <ScrollArea className="h-[455px] px-4 py-2">
-                        {Array.isArray(transcriptSegments) && transcriptSegments.length ? (
-                          <div className="space-y-2">
-                            {transcriptSegments.map((seg) => (
-                              <button
-                                key={seg.id}
-                                onClick={() => seekToSeconds(seg.start_sec)}
-                                className="w-full text-left p-2 rounded-lg hover:bg-white/5 transition-colors group"
-                              >
-                                <span className="text-xs text-purple-400 group-hover:text-purple-300">
-                                  {fmtTimestamp(seg.start_sec)}
-                                </span>
-                                <p className="text-sm text-gray-300 mt-1">{seg.text}</p>
-                              </button>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="text-center py-12">
-                            <FileText className="w-12 h-12 text-gray-500 mx-auto mb-3" />
-                            <p className="text-gray-500 text-sm">No transcript available</p>
-                          </div>
-                        )}
-                      </ScrollArea>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-
-                {/* Chat */}
-                <AnimatePresence>
-                  {isChatOpen && (
-                    renderChatPanel({ scrollHeightClass: "h-[300px]", variant: "sidebar" })
-                  )}
-                </AnimatePresence>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
-        {/* AI Summary - Full Width Bottom */}
-        <div className="border-t border-white/5 p-6 lg:p-8">
-          <div className="max-w-7xl mx-auto">
-            <div className="glass-card rounded-2xl p-6">
+            {/* AI Summary */}
+            <div className="glass-card rounded-2xl p-6 mb-6">
               <button
                 onClick={() => setIsSummaryExpanded((v) => !v)}
                 className="flex items-center justify-between w-full mb-4 hover:opacity-80 transition-opacity"
@@ -1131,7 +985,78 @@ export default function VideoPlayer() {
               </AnimatePresence>
             </div>
           </div>
+
+          {/* Right Sidebar - Transcript & Chat */}
+          <AnimatePresence>
+            {(isTranscriptOpen || isChatOpen) && (
+              <motion.div
+                initial={{ x: "100%" }}
+                animate={{ x: 0 }}
+                exit={{ x: "100%" }}
+                transition={{ type: "spring", damping: 25, stiffness: 300 }}
+                className="w-full lg:w-[380px] flex flex-col gap-4 px-4 pb-4 pt-0"
+              >
+                {/* Transcript */}
+                <AnimatePresence>
+                  {isTranscriptOpen && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      className="glass-card rounded-2xl overflow-hidden"
+                    >
+                      <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0">
+                        <div className="flex items-center gap-2">
+                          <FileText className="w-5 h-5 text-purple-400" />
+                          <h2 className="text-lg font-semibold">Transcript</h2>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setIsTranscriptOpen(false)}
+                          className="text-gray-400 hover:text-white hover:bg-white/5"
+                        >
+                          <X className="w-5 h-5" />
+                        </Button>
+                      </div>
+                      <ScrollArea className="h-[455px] px-4 py-2">
+                        {Array.isArray(transcriptSegments) && transcriptSegments.length ? (
+                          <div className="space-y-2">
+                            {transcriptSegments.map((seg) => (
+                              <button
+                                key={seg.id}
+                                onClick={() => seekToSeconds(seg.start_sec)}
+                                className="w-full text-left p-2 rounded-lg hover:bg-white/5 transition-colors group"
+                              >
+                                <span className="text-xs text-purple-400 group-hover:text-purple-300">
+                                  {fmtTimestamp(seg.start_sec)}
+                                </span>
+                                <p className="text-sm text-gray-300 mt-1">{seg.text}</p>
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-center py-12">
+                            <FileText className="w-12 h-12 text-gray-500 mx-auto mb-3" />
+                            <p className="text-gray-500 text-sm">No transcript available</p>
+                          </div>
+                        )}
+                      </ScrollArea>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* Chat */}
+                <AnimatePresence>
+                  {isChatOpen && (
+                    renderChatPanel({ scrollHeightClass: "h-[300px]", variant: "sidebar" })
+                  )}
+                </AnimatePresence>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
+
       </div>
 
       <CourseSidebar
