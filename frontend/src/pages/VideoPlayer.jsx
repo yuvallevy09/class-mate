@@ -704,8 +704,9 @@ export default function VideoPlayer() {
       initial={{ height: 0, opacity: 0 }}
       animate={{ height: "auto", opacity: 1 }}
       exit={{ height: 0, opacity: 0 }}
-      className="flex flex-col glass-card rounded-2xl overflow-hidden"
+      className="glass-card rounded-2xl overflow-hidden"
     >
+      <div className={`flex flex-col ${isPopout ? "" : "lg:h-[520px]"}`}>
       <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
           <MessageSquare className="w-5 h-5 text-purple-400" />
@@ -829,6 +830,7 @@ export default function VideoPlayer() {
           </Button>
         </div>
       </div>
+      </div>
     </motion.div>
     );
   };
@@ -899,10 +901,14 @@ export default function VideoPlayer() {
             </div>
 
             {/* AI Summary */}
-            <div className="glass-card rounded-2xl p-6 mb-6">
+            <div
+              className={`glass-card rounded-2xl p-6 mb-6 flex flex-col ${
+                isSummaryExpanded ? "lg:h-[520px]" : ""
+              }`}
+            >
               <button
                 onClick={() => setIsSummaryExpanded((v) => !v)}
-                className="flex items-center justify-between w-full mb-4 hover:opacity-80 transition-opacity"
+                className="flex items-center justify-between w-full mb-4 hover:opacity-80 transition-opacity shrink-0"
               >
                 <div className="flex items-center gap-2">
                   <Sparkles className="w-5 h-5 text-purple-400" />
@@ -925,6 +931,7 @@ export default function VideoPlayer() {
                     animate={{ height: "auto", opacity: 1 }}
                     exit={{ height: 0, opacity: 0 }}
                     transition={{ duration: 0.2 }}
+                    className="flex flex-col lg:flex-1 lg:min-h-0"
                   >
                     {isSummaryLoading || isSummaryFetching ? (
                       <div className="text-center py-12">
@@ -958,7 +965,7 @@ export default function VideoPlayer() {
                         </Button>
                       </div>
                     ) : aiSummaryText ? (
-                      <div className="text-gray-300 text-sm leading-relaxed max-h-[400px] overflow-y-auto pr-2">
+                      <div className="text-gray-300 text-sm leading-relaxed max-h-[400px] lg:max-h-none lg:flex-1 lg:min-h-0 overflow-y-auto pr-2">
                         <ReactMarkdown
                           remarkPlugins={[remarkGfm]}
                           components={markdownComponents}
@@ -1051,7 +1058,10 @@ export default function VideoPlayer() {
                 {/* Chat */}
                 <AnimatePresence>
                   {isChatOpen && (
-                    renderChatPanel({ scrollHeightClass: "h-[300px]", variant: "sidebar" })
+                    renderChatPanel({
+                      scrollHeightClass: "h-[300px] lg:h-auto lg:flex-1 lg:min-h-0",
+                      variant: "sidebar",
+                    })
                   )}
                 </AnimatePresence>
               </motion.div>
