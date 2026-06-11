@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.router import api_router
 from app.core.settings import get_settings
+from app.core.tracing import setup_dspy_tracing
 from app.db.session import get_db
 
 
@@ -21,6 +22,9 @@ os.environ.setdefault("LANGCHAIN_TELEMETRY", "false")
 
 def create_app() -> FastAPI:
     settings = get_settings()
+
+    if settings.dspy_tracing_enabled:
+        setup_dspy_tracing()
 
     app = FastAPI(title="ClassMate API")
 

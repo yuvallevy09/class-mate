@@ -34,3 +34,8 @@ dist-ssr
 *.sw?
 
 .env
+
+# MLflow traces (local DSPy observability)
+backend/mlruns/
+backend/mlartifacts/
+backend/mlflow.db

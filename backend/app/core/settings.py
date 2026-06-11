@@ -88,6 +88,10 @@ class Settings(BaseSettings):
         validation_alias="RAG_LOCAL_EMBEDDING_MODEL",
     )
 
+    # DSPy tracing (MLflow autolog; dev-only observability for DSPy modules).
+    # Requires the `mlflow` dev dependency; ignored in production installs without it.
+    dspy_tracing_enabled: bool = Field(default=False, validation_alias="DSPY_TRACING_ENABLED")
+
     # DSPy router (intent routing for retrieval vs general answering)
     dspy_router_enabled: bool = Field(default=False, validation_alias="DSPY_ROUTER_ENABLED")
     # DSPy uses LiteLLM-style model identifiers.

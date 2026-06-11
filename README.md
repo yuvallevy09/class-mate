@@ -79,7 +79,6 @@ This repo uses a simple monorepo layout with two apps:
 
 ```bash
 cd backend
-cp env.example .env
 uv sync
 ```
 
