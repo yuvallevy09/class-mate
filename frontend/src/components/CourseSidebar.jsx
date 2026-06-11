@@ -90,7 +90,7 @@ export default function CourseSidebar({
             animate={{ x: 0 }}
             exit={{ x: "100%" }}
             transition={{ type: "spring", damping: 25, stiffness: 300 }}
-            className="fixed right-0 top-[73px] bottom-0 w-80 glass-card border-l border-white/5 z-40"
+            className="fixed right-0 top-0 bottom-0 w-80 glass-card border-l border-white/5 z-40 flex flex-col"
           >
             <div className="p-6 border-b border-white/5 flex items-center justify-between">
               <Link to={createPageUrl("Courses")} onClick={() => onClose?.()}>
@@ -112,7 +112,7 @@ export default function CourseSidebar({
               </Button>
             </div>
 
-            <ScrollArea className="h-[calc(100%-73px)]">
+            <ScrollArea className="flex-1">
               <div className="p-4 space-y-6">
                 {/* Course Content */}
                 <div>
