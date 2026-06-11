@@ -365,6 +365,17 @@ function VideoChatSources({ citations, messageKey, currentContentId, onSeekToSec
   );
 }
 
+// Shared height for the video, transcript, chat, and expanded AI Summary cards.
+// Sized so the collapsed AI Summary bar (124px, matching the floating toggle
+// button stack) spans exactly the same vertical band as those buttons:
+// 349px ≈ navbar + breadcrumbs + collapsed summary bar + vertical gaps.
+// Never shrinks below the 520px baseline.
+const CARD_HEIGHT_CLASS = "lg:h-[max(520px,calc(100vh-349px))]";
+
+// Height of the collapsed AI Summary bar: equal to the floating toggle button
+// stack (two h-14 buttons + gap-3), so their tops and bottoms align.
+const COLLAPSED_SUMMARY_HEIGHT_CLASS = "lg:h-[124px]";
+
 export default function VideoPlayer() {
   const location = useLocation();
   const { courseId, contentId } = useMemo(() => {
@@ -706,7 +717,7 @@ export default function VideoPlayer() {
       exit={{ height: 0, opacity: 0 }}
       className="glass-card rounded-2xl overflow-hidden"
     >
-      <div className={`flex flex-col ${isPopout ? "" : "lg:h-[520px]"}`}>
+      <div className={`flex flex-col ${isPopout ? "" : CARD_HEIGHT_CLASS}`}>
       <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
           <MessageSquare className="w-5 h-5 text-purple-400" />
@@ -845,9 +856,9 @@ export default function VideoPlayer() {
 
       <Navbar onMenuClick={() => setIsSidebarOpen((v) => !v)} showMenu={true} />
 
-      <div className="flex-1 flex flex-col relative z-10 w-full max-w-7xl mx-auto">
+      <div className="flex-1 flex flex-col relative z-10 w-full">
         {/* Breadcrumbs (shared across main + sidebar so sidebar aligns with video) */}
-        <div className="px-6 lg:px-8 pt-6 lg:pt-8">
+        <div className="w-full max-w-7xl mx-auto px-6 lg:px-8 pt-6 lg:pt-8">
           <div>
             <div className="mb-6 flex items-center gap-2 text-sm">
               <Link
@@ -862,17 +873,18 @@ export default function VideoPlayer() {
           </div>
         </div>
 
-        <div className="flex flex-1 overflow-hidden">
+        {/* 3-column grid on lg+: [gutter | centered content | gutter]. The video
+            column is always the center column, so opening the transcript/chat
+            widgets (which live in the right gutter) never moves the video. */}
+        <div
+          className={`flex flex-1 overflow-hidden lg:grid ${
+            isTranscriptOpen || isChatOpen
+              ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,1280px)_minmax(280px,1fr)]"
+              : "lg:grid-cols-[minmax(0,1fr)_minmax(0,1280px)_minmax(0,1fr)]"
+          }`}
+        >
           {/* Toggle Buttons */}
           <div className="fixed bottom-6 right-6 flex flex-col gap-3 z-50">
-            {!isChatOpen && (
-              <Button
-                onClick={() => setIsChatOpen(true)}
-                className="btn-gradient rounded-full h-14 w-14 p-0 shadow-lg"
-              >
-                <MessageSquare className="w-6 h-6" />
-              </Button>
-            )}
             {!isTranscriptOpen && (
               <Button
                 onClick={() => setIsTranscriptOpen(true)}
@@ -881,12 +893,20 @@ export default function VideoPlayer() {
                 <FileText className="w-6 h-6" />
               </Button>
             )}
+            {!isChatOpen && (
+              <Button
+                onClick={() => setIsChatOpen(true)}
+                className="btn-gradient rounded-full h-14 w-14 p-0 shadow-lg"
+              >
+                <MessageSquare className="w-6 h-6" />
+              </Button>
+            )}
           </div>
 
           {/* Main Content */}
-          <div className="flex-1 flex flex-col px-6 lg:px-8 overflow-y-auto">
+          <div className="flex-1 flex flex-col min-w-0 lg:col-start-2 px-6 lg:px-8 overflow-y-auto">
             <div className="glass-card rounded-2xl overflow-hidden mb-6">
-              <div className="relative w-full bg-black aspect-video lg:aspect-auto lg:h-[520px]">
+              <div className={`relative w-full bg-black aspect-video lg:aspect-auto ${CARD_HEIGHT_CLASS}`}>
                 <video
                   ref={videoRef}
                   key={videoUrl || "video"}
@@ -903,7 +923,7 @@ export default function VideoPlayer() {
             {/* AI Summary */}
             <div
               className={`glass-card rounded-2xl p-6 mb-6 flex flex-col ${
-                isSummaryExpanded ? "lg:h-[520px]" : ""
+                isSummaryExpanded ? CARD_HEIGHT_CLASS : COLLAPSED_SUMMARY_HEIGHT_CLASS
               }`}
             >
               <button
@@ -996,7 +1016,7 @@ export default function VideoPlayer() {
                 animate={{ x: 0 }}
                 exit={{ x: "100%" }}
                 transition={{ type: "spring", damping: 25, stiffness: 300 }}
-                className="w-full lg:w-[380px] flex flex-col gap-6 px-4 pb-4 pt-0"
+                className="w-full lg:col-start-3 lg:w-auto lg:max-w-[428px] lg:min-w-0 flex flex-col gap-6 px-4 lg:-ml-8 lg:px-7 pb-4 pt-0"
               >
                 {/* Transcript */}
                 <AnimatePresence>
@@ -1007,7 +1027,7 @@ export default function VideoPlayer() {
                       exit={{ height: 0, opacity: 0 }}
                       className="glass-card rounded-2xl overflow-hidden"
                     >
-                      <div className="flex flex-col lg:h-[520px]">
+                      <div className={`flex flex-col ${CARD_HEIGHT_CLASS}`}>
                       <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0">
                         <div className="flex items-center gap-2">
                           <FileText className="w-5 h-5 text-purple-400" />
