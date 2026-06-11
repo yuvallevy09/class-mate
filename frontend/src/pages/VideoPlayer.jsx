@@ -912,12 +912,7 @@ export default function VideoPlayer() {
               >
                 <div className="flex items-center gap-2">
                   <Sparkles className="w-5 h-5 text-purple-400" />
-                  <div className="flex flex-col items-start">
-                    <h2 className="text-xl font-semibold">AI Summary</h2>
-                    {aiTitleText ? (
-                      <div className="text-xs text-gray-400 mt-0.5">AI title: {aiTitleText}</div>
-                    ) : null}
-                  </div>
+                  <h2 className="text-xl font-semibold">AI Summary</h2>
                 </div>
                 <span className={`text-gray-400 transition-transform ${isSummaryExpanded ? "" : "-rotate-90"}`}>
                   ▾
