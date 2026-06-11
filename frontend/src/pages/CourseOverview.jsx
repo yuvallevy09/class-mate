@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
@@ -12,6 +12,8 @@ import {
 
 import { createPageUrl, courseGradient } from "@/utils";
 import { getCourse } from "@/api/courses";
+import { listCourseContents } from "@/api/courseContents";
+import { listVideoAssets } from "@/api/videoAssets";
 import { Button } from "@/components/ui/button";
 import Navbar from "@/components/Navbar";
 import CourseSidebar from "@/components/CourseSidebar";
@@ -27,56 +29,21 @@ const STUB_SUMMARY_PARAGRAPHS = [
   "Most recently, the lectures turned to eigenvalues and eigenvectors: finding them via the characteristic polynomial, interpreting them as directions a map merely stretches, and using them to understand the long-run behavior of repeated transformations. This sets up diagonalization, which the latest lecture begins to develop.",
 ];
 
-const STUB_LECTURES = [
-  {
-    id: "stub-1",
-    title: "Vectors and Vector Spaces",
-    aiDescription:
-      "Introduces vectors geometrically and algebraically, then defines vector spaces and subspaces. Covers span, linear combinations, and linear independence with worked examples in R2 and R3.",
-    date: "Apr 14, 2026",
-    status: "done",
-  },
-  {
-    id: "stub-2",
-    title: "Matrix Operations and Linear Maps",
-    aiDescription:
-      "Develops matrix addition and multiplication, and frames matrices as linear transformations. Shows how composition of maps corresponds to matrix products.",
-    date: "Apr 21, 2026",
-    status: "done",
-  },
-  {
-    id: "stub-3",
-    title: "Determinants and Invertibility",
-    aiDescription:
-      "Defines the determinant via cofactor expansion and as signed volume. Connects nonzero determinants to invertibility and derives properties used for fast evaluation.",
-    date: "Apr 28, 2026",
-    status: "done",
-  },
-  {
-    id: "stub-4",
-    title: "Eigenvalues and Eigenvectors",
-    aiDescription:
-      "Motivates eigenvectors as directions preserved by a transformation. Computes eigenvalues from the characteristic polynomial and interprets them through repeated application of a map.",
-    date: "May 5, 2026",
-    status: "done",
-  },
-  {
-    id: "stub-5",
-    title: "Diagonalization",
-    aiDescription: null,
-    date: "May 12, 2026",
-    status: "transcribing",
-  },
-];
+const PROCESSING_STATUSES = ["processing", "extracting_audio", "transcribing"];
 
-const SUMMARY_STATES = ["empty", "generating", "ready"];
+function formatDate(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
 
 function SummaryContent({ state, lectureCount }) {
   const [expanded, setExpanded] = useState(false);
 
   if (state === "empty") {
     return (
-      <p className="text-gray-500 leading-relaxed max-w-2xl">
+      <p className="text-gray-500 leading-relaxed">
         Once you upload your first lecture, ClassMate will write a running
         summary of what the course has covered so far — and keep it up to date
         with every new lecture.
@@ -86,7 +53,7 @@ function SummaryContent({ state, lectureCount }) {
 
   if (state === "generating") {
     return (
-      <div className="max-w-2xl">
+      <div>
         <div className="flex items-center gap-2 text-sm text-purple-300 mb-4">
           <Loader2 className="w-4 h-4 animate-spin" />
           Summarizing Lecture {lectureCount}…
@@ -101,7 +68,7 @@ function SummaryContent({ state, lectureCount }) {
   }
 
   return (
-    <div className="max-w-2xl">
+    <div>
       <div className="relative">
         <div className={expanded ? "" : "max-h-44 overflow-hidden"}>
           {STUB_SUMMARY_PARAGRAPHS.map((p, i) => (
@@ -134,7 +101,7 @@ function SummaryContent({ state, lectureCount }) {
 }
 
 function LectureRow({ lecture, index, courseId }) {
-  const isProcessing = lecture.status === "transcribing";
+  const isProcessing = lecture.isProcessing;
 
   return (
     <motion.div
@@ -172,12 +139,24 @@ function LectureRow({ lecture, index, courseId }) {
                 {lecture.title}
               </h3>
               <p className="text-sm text-gray-400 leading-relaxed mb-3">
-                {lecture.aiDescription || "No description yet."}
+                {lecture.description || "No description yet."}
               </p>
               <span className="text-xs text-gray-500">{lecture.date}</span>
             </div>
-            <div className="hidden sm:flex w-28 h-16 rounded-lg bg-black/40 border border-white/5 items-center justify-center shrink-0">
-              <Video className="w-5 h-5 text-gray-600" />
+            <div className="hidden sm:flex w-28 h-16 rounded-lg bg-black/40 border border-white/5 items-center justify-center shrink-0 overflow-hidden">
+              {lecture.thumbnailUrl ? (
+                <img
+                  src={lecture.thumbnailUrl}
+                  alt={lecture.title}
+                  loading="lazy"
+                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    e.currentTarget.style.display = "none";
+                  }}
+                />
+              ) : (
+                <Video className="w-5 h-5 text-gray-600" />
+              )}
             </div>
           </div>
         </Link>
@@ -221,48 +200,11 @@ function EmptyCourseState({ courseId }) {
   );
 }
 
-// Dev-only pill for previewing every design state without backend data.
-function DevStatePill({ summaryState, setSummaryState, showEmptyCourse, setShowEmptyCourse }) {
-  return (
-    <div className="fixed bottom-4 left-4 z-50 glass-card rounded-full px-4 py-2 flex items-center gap-2 text-xs">
-      <span className="text-gray-500 font-semibold">Preview:</span>
-      {SUMMARY_STATES.map((s) => (
-        <button
-          key={s}
-          type="button"
-          onClick={() => setSummaryState(s)}
-          className={`px-2 py-1 rounded-full transition-colors ${
-            summaryState === s
-              ? "bg-purple-500/20 text-white border border-purple-500/30"
-              : "text-gray-400 hover:text-white"
-          }`}
-        >
-          {s}
-        </button>
-      ))}
-      <span className="w-px h-4 bg-white/10" />
-      <button
-        type="button"
-        onClick={() => setShowEmptyCourse((v) => !v)}
-        className={`px-2 py-1 rounded-full transition-colors ${
-          showEmptyCourse
-            ? "bg-purple-500/20 text-white border border-purple-500/30"
-            : "text-gray-400 hover:text-white"
-        }`}
-      >
-        empty course
-      </button>
-    </div>
-  );
-}
-
 export default function CourseOverview() {
   const urlParams = new URLSearchParams(window.location.search);
   const courseId = urlParams.get("id");
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [summaryState, setSummaryState] = useState("ready");
-  const [showEmptyCourse, setShowEmptyCourse] = useState(false);
 
   const { data: course } = useQuery({
     queryKey: ["course", courseId],
@@ -270,9 +212,47 @@ export default function CourseOverview() {
     enabled: !!courseId,
   });
 
+  const { data: content = [], isLoading } = useQuery({
+    queryKey: ["content", courseId, "media"],
+    queryFn: () => listCourseContents(courseId, { category: "media" }),
+    enabled: !!courseId,
+  });
+
+  // Poll while any video is still processing so descriptions appear live.
+  const { data: videoAssets = [] } = useQuery({
+    queryKey: ["videoAssets", courseId],
+    queryFn: () => listVideoAssets(courseId),
+    enabled: !!courseId,
+    refetchInterval: (data) => {
+      const items = data || [];
+      const anyProcessing =
+        Array.isArray(items) && items.some((a) => PROCESSING_STATUSES.includes(a.status));
+      return anyProcessing ? 2000 : false;
+    },
+  });
+
+  const lectures = useMemo(() => {
+    const assetByContentId = new Map();
+    for (const a of Array.isArray(videoAssets) ? videoAssets : []) {
+      if (a?.content_id) assetByContentId.set(a.content_id, a);
+    }
+    return [...content]
+      .sort((a, b) => String(a?.created_at || "").localeCompare(String(b?.created_at || "")))
+      .map((item) => {
+        const asset = assetByContentId.get(item.id) || null;
+        return {
+          id: item.id,
+          title: item.title,
+          description: asset?.ai_description || item.description || null,
+          date: formatDate(item.created_at),
+          isProcessing: !!asset && PROCESSING_STATUSES.includes(asset.status),
+          thumbnailUrl: asset?.thumbnail_url || null,
+        };
+      });
+  }, [content, videoAssets]);
+
   const gradient = courseGradient(courseId);
-  const lectures = showEmptyCourse ? [] : STUB_LECTURES;
-  const isEmpty = lectures.length === 0;
+  const isEmpty = !isLoading && lectures.length === 0;
   const lastUpdated = lectures.length ? lectures[lectures.length - 1].date : null;
 
   return (
@@ -303,17 +283,30 @@ export default function CourseOverview() {
             <div className="flex items-center gap-2 text-sm text-gray-500 mb-5">
               <Video className="w-4 h-4" />
               <span>
-                {lectures.length} {lectures.length === 1 ? "lecture" : "lectures"}
-                {lastUpdated ? ` · Updated ${lastUpdated}` : ""}
+                {isLoading
+                  ? "…"
+                  : `${lectures.length} ${lectures.length === 1 ? "lecture" : "lectures"}${
+                      lastUpdated ? ` · Updated ${lastUpdated}` : ""
+                    }`}
               </span>
             </div>
             {/* Course summary lives in the hero, where the description used to be. */}
-            {!isEmpty && (
-              <SummaryContent state={summaryState} lectureCount={lectures.length} />
+            {!isLoading && !isEmpty && (
+              <SummaryContent state="ready" lectureCount={lectures.length} />
             )}
           </motion.section>
 
-          {isEmpty ? (
+          {isLoading ? (
+            <div className="space-y-3">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="glass-card rounded-2xl p-5 animate-pulse">
+                  <div className="h-5 bg-white/10 rounded w-1/3 mb-3" />
+                  <div className="h-3.5 bg-white/5 rounded w-full mb-2" />
+                  <div className="h-3.5 bg-white/5 rounded w-3/4" />
+                </div>
+              ))}
+            </div>
+          ) : isEmpty ? (
             <EmptyCourseState courseId={courseId} />
           ) : (
             <>
@@ -349,15 +342,6 @@ export default function CourseOverview() {
           )}
         </div>
       </main>
-
-      {import.meta.env.DEV && (
-        <DevStatePill
-          summaryState={summaryState}
-          setSummaryState={setSummaryState}
-          showEmptyCourse={showEmptyCourse}
-          setShowEmptyCourse={setShowEmptyCourse}
-        />
-      )}
 
       <CourseSidebar
         courseId={courseId}

@@ -43,6 +43,9 @@ class VideoAssetPublic(BaseModel):
     transcription_completed_at: datetime | None
     transcript_ingested_at: datetime | None
 
+    # Short AI-generated blurb (1-3 sentences), populated by the transcription pipeline.
+    ai_description: str | None = None
+
     created_at: datetime
     updated_at: datetime
 

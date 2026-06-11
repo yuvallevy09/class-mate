@@ -53,6 +53,19 @@ async def _create_user(database_url: str, *, email: str, password: str) -> User:
         await engine.dispose()
 
 
+async def _set_ai_description(database_url: str, *, video_asset_id: str, description: str) -> None:
+    engine = create_async_engine(database_url, pool_pre_ping=True)
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(
+                text("UPDATE video_assets SET ai_description = :d WHERE id = :id"),
+                {"d": description, "id": video_asset_id},
+            )
+            await conn.commit()
+    finally:
+        await engine.dispose()
+
+
 async def _create_course(database_url: str, *, user_id: int, name: str) -> Course:
     engine = create_async_engine(database_url, pool_pre_ping=True)
     SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
@@ -154,6 +167,20 @@ async def test_video_assets_auth_and_ownership(monkeypatch) -> None:
         assert listed.status_code == 200
         items = listed.json()
         assert any(i["id"] == asset["id"] for i in items)
+
+        # ai_description is exposed on the list payload: None until generated, then round-trips.
+        listed_item = next(i for i in items if i["id"] == asset["id"])
+        assert listed_item["ai_description"] is None
+
+        await _set_ai_description(
+            settings.database_url,
+            video_asset_id=asset["id"],
+            description="Introduces vectors, span, and linear independence.",
+        )
+        relisted = await client.get(f"/api/v1/courses/{course_a.id}/video-assets")
+        assert relisted.status_code == 200
+        relisted_item = next(i for i in relisted.json() if i["id"] == asset["id"])
+        assert relisted_item["ai_description"] == "Introduces vectors, span, and linear independence."
 
         got = await client.get(f"/api/v1/video-assets/{asset['id']}")
         assert got.status_code == 200
