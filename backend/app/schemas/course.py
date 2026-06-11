@@ -25,6 +25,9 @@ class CoursePublic(BaseModel):
     id: UUID
     name: str
     description: str | None
+    # Course-level AI summary, regenerated after each new lecture transcription.
+    ai_summary: str | None = None
+    ai_summary_generated_at: datetime | None = None
     created_at: datetime
 
 

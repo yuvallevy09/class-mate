@@ -21,6 +21,7 @@ from app.db.models.video_asset import VideoAsset
 from app.db.session import get_session_maker
 from app.services.video_chapters import chapterize_or_fallback
 from app.services.transcript_chunk_ingestion import ingest_video_asset_transcript_to_chunks
+from app.services.course_summary import generate_and_store_course_summary
 from app.services.lecture_artifacts import generate_and_store_lecture_artifacts
 
 
@@ -502,6 +503,19 @@ async def transcribe_video_asset(*, video_asset_id: UUID, requested_language: st
                         )
                 except Exception:
                     # Never fail the transcription pipeline because summary generation failed.
+                    pass
+
+                # Best-effort: refresh the course-level summary now that a new
+                # lecture's artifacts exist. Replace-on-success semantics live in
+                # the service; the old summary stays until the new one is ready.
+                try:
+                    await generate_and_store_course_summary(
+                        db=db,
+                        settings=settings,
+                        course_id=asset.course_id,
+                    )
+                except Exception:
+                    # Never fail the transcription pipeline over the course summary.
                     pass
         except subprocess.CalledProcessError:
             asset.status = "error"

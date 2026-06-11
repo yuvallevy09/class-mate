@@ -1,9 +1,10 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
   Video,
+  MessageSquare,
   ChevronDown,
   ChevronUp,
   Loader2,
@@ -18,17 +19,6 @@ import { Button } from "@/components/ui/button";
 import Navbar from "@/components/Navbar";
 import CourseSidebar from "@/components/CourseSidebar";
 
-// ---------------------------------------------------------------------------
-// Increment 1: stub content only. Real lecture data + summary endpoint get
-// wired in later increments (see plan); the layout below is the contract.
-// ---------------------------------------------------------------------------
-
-const STUB_SUMMARY_PARAGRAPHS = [
-  "This course has built a foundation in linear algebra, starting from the geometry and algebra of vectors and the axioms that define a vector space. You learned to test sets for closure under addition and scaling, and to reason about subspaces, span, and linear independence as the language for describing structure inside a space.",
-  "From there, the course moved to matrices as representations of linear maps. You practiced matrix multiplication as composition of maps, studied the column space and null space, and connected solving Ax = b to questions about rank and invertibility. Determinants were introduced both computationally and as signed volume, giving a concrete test for when a matrix is invertible.",
-  "Most recently, the lectures turned to eigenvalues and eigenvectors: finding them via the characteristic polynomial, interpreting them as directions a map merely stretches, and using them to understand the long-run behavior of repeated transformations. This sets up diagonalization, which the latest lecture begins to develop.",
-];
-
 const PROCESSING_STATUSES = ["processing", "extracting_audio", "transcribing"];
 
 function formatDate(iso) {
@@ -38,15 +28,16 @@ function formatDate(iso) {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function SummaryContent({ state, lectureCount }) {
+function SummaryContent({ state, summary }) {
   const [expanded, setExpanded] = useState(false);
 
+  // Only rendered for courses that already have lectures, so "empty" here
+  // means "no summary generated yet" rather than "no content".
   if (state === "empty") {
     return (
       <p className="text-gray-500 leading-relaxed">
-        Once you upload your first lecture, ClassMate will write a running
-        summary of what the course has covered so far — and keep it up to date
-        with every new lecture.
+        Your course summary will appear here after the next lecture finishes
+        processing.
       </p>
     );
   }
@@ -56,7 +47,7 @@ function SummaryContent({ state, lectureCount }) {
       <div>
         <div className="flex items-center gap-2 text-sm text-purple-300 mb-4">
           <Loader2 className="w-4 h-4 animate-spin" />
-          Summarizing Lecture {lectureCount}…
+          Updating course summary…
         </div>
         <div className="space-y-3 animate-pulse">
           <div className="h-4 bg-white/10 rounded w-full" />
@@ -67,11 +58,16 @@ function SummaryContent({ state, lectureCount }) {
     );
   }
 
+  const paragraphs = String(summary || "")
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
   return (
     <div>
       <div className="relative">
         <div className={expanded ? "" : "max-h-44 overflow-hidden"}>
-          {STUB_SUMMARY_PARAGRAPHS.map((p, i) => (
+          {paragraphs.map((p, i) => (
             <p key={i} className="text-gray-300 leading-relaxed mb-4 last:mb-0">
               {p}
             </p>
@@ -206,12 +202,6 @@ export default function CourseOverview() {
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
-  const { data: course } = useQuery({
-    queryKey: ["course", courseId],
-    queryFn: () => getCourse(courseId),
-    enabled: !!courseId,
-  });
-
   const { data: content = [], isLoading } = useQuery({
     queryKey: ["content", courseId, "media"],
     queryFn: () => listCourseContents(courseId, { category: "media" }),
@@ -229,6 +219,34 @@ export default function CourseOverview() {
         Array.isArray(items) && items.some((a) => PROCESSING_STATUSES.includes(a.status));
       return anyProcessing ? 2000 : false;
     },
+  });
+
+  const anyProcessing =
+    Array.isArray(videoAssets) && videoAssets.some((a) => PROCESSING_STATUSES.includes(a.status));
+
+  // The course summary regenerates AFTER transcription completes, so keep
+  // polling the course for a window after processing ends to pick it up.
+  const [isSettling, setIsSettling] = useState(false);
+  const prevProcessing = useRef(false);
+  useEffect(() => {
+    const wasProcessing = prevProcessing.current;
+    prevProcessing.current = anyProcessing;
+    if (anyProcessing) {
+      setIsSettling(false);
+      return;
+    }
+    if (wasProcessing) {
+      setIsSettling(true);
+      const t = setTimeout(() => setIsSettling(false), 45000);
+      return () => clearTimeout(t);
+    }
+  }, [anyProcessing]);
+
+  const { data: course } = useQuery({
+    queryKey: ["course", courseId],
+    queryFn: () => getCourse(courseId),
+    enabled: !!courseId,
+    refetchInterval: anyProcessing || isSettling ? 3000 : false,
   });
 
   const lectures = useMemo(() => {
@@ -254,6 +272,13 @@ export default function CourseOverview() {
   const gradient = courseGradient(courseId);
   const isEmpty = !isLoading && lectures.length === 0;
   const lastUpdated = lectures.length ? lectures[lectures.length - 1].date : null;
+
+  // Old summary stays visible while a refresh is in flight (replace-on-success).
+  const summaryState = course?.ai_summary
+    ? "ready"
+    : anyProcessing || isSettling
+      ? "generating"
+      : "empty";
 
   return (
     <div className="min-h-screen relative">
@@ -292,7 +317,7 @@ export default function CourseOverview() {
             </div>
             {/* Course summary lives in the hero, where the description used to be. */}
             {!isLoading && !isEmpty && (
-              <SummaryContent state="ready" lectureCount={lectures.length} />
+              <SummaryContent state={summaryState} summary={course?.ai_summary} />
             )}
           </motion.section>
 
@@ -314,15 +339,27 @@ export default function CourseOverview() {
               <section>
                 <div className="flex items-center justify-between mb-6">
                   <h2 className="text-2xl font-bold">Lectures</h2>
-                  <Link to={createPageUrl(`CourseContent?courseId=${courseId}&category=media`)}>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-gray-400 hover:text-white hover:bg-white/5 rounded-full"
-                    >
-                      Manage lectures
-                    </Button>
-                  </Link>
+                  <div className="flex items-center gap-2">
+                    <Link to={createPageUrl(`CourseContent?courseId=${courseId}&category=media`)}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-gray-400 hover:text-white hover:bg-white/5 rounded-full"
+                      >
+                        Manage lectures
+                      </Button>
+                    </Link>
+                    <Link to={createPageUrl(`CourseChat?id=${courseId}`)}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-purple-400 hover:text-purple-300 hover:bg-purple-500/10 rounded-full"
+                      >
+                        <MessageSquare className="w-4 h-4 mr-1.5" />
+                        Ask ClassMate
+                      </Button>
+                    </Link>
+                  </div>
                 </div>
                 <div className="relative">
                   <div className="absolute left-5 top-6 bottom-6 w-px bg-purple-500/20" />
