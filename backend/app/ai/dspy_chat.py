@@ -4,6 +4,7 @@ import re
 
 import dspy
 
+from app.ai.llm import build_lm
 from app.core.settings import Settings
 
 
@@ -140,23 +141,6 @@ def _derive_title_from_message(message: str) -> str | None:
     return final[:80] if final else None
 
 
-def _litellm_gemini_model(model: str) -> str:
-    m = (model or "").strip()
-    if not m:
-        m = "gemini-2.5-flash"
-    # DSPy uses LiteLLM model identifiers. Gemini is typically "gemini/<model>".
-    if "/" in m:
-        return m
-    return f"gemini/{m}"
-
-
-def _effective_gemini_api_key(settings: Settings) -> str:
-    key = (settings.google_api_key or "").strip()
-    if not key:
-        raise ValueError("Missing Gemini API key. Set GOOGLE_API_KEY in backend/.env.")
-    return key
-
-
 class _ReplySig(dspy.Signature):
     """Answer the user's question. If provided, use course excerpts and cite them as [#]."""
 
@@ -190,12 +174,10 @@ def generate_reply_dspy(
     user_message: str,
 ) -> str:
     # Configure LM per-call (important in async servers).
-    _effective_gemini_api_key(settings)  # validate early (fails fast, no network)
-    lm = dspy.LM(
-        model=_litellm_gemini_model(settings.gemini_model),
+    lm = build_lm(
+        settings,
         temperature=float(settings.chat_temperature),
         max_tokens=900,
-        num_retries=2,
     )
     pred = dspy.Predict(_ReplySig)
     with dspy.settings.context(lm=lm):
@@ -209,8 +191,7 @@ def generate_reply_dspy(
 
 
 def generate_title_dspy(*, settings: Settings, course_name: str, first_user_message: str) -> str:
-    _effective_gemini_api_key(settings)  # validate early
-    lm = dspy.LM(model=_litellm_gemini_model(settings.gemini_model), temperature=0.0, max_tokens=40, num_retries=2)
+    lm = build_lm(settings, temperature=0.0, max_tokens=40)
     pred = dspy.Predict(_TitleSig)
     with dspy.settings.context(lm=lm):
         out = pred(course_name=(course_name or "").strip(), first_user_message=(first_user_message or "").strip())

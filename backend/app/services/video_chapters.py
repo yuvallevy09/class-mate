@@ -8,6 +8,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.dspy_chapters import generate_chapters_dspy
+from app.ai.llm import litellm_model_id
 from app.core.settings import Settings, get_settings
 from app.db.models.transcript_segment import TranscriptSegment
 from app.db.models.video_chapter import VideoChapter
@@ -160,7 +161,7 @@ async def replace_with_semantic_chapters(
     )
 
     src_hash = _hash_blocks(blocks)
-    model_id = str(getattr(settings, "gemini_model", "") or "").strip() or None
+    model_id = litellm_model_id(settings)
     prompt_version = "chapters_v1"
 
     rows: list[VideoChapter] = []

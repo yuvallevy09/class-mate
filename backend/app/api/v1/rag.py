@@ -52,31 +52,11 @@ async def _ensure_owned_course(db: AsyncSession, *, course_id: UUID, user_id: in
 
 
 def _embeddings_configured(settings: Settings) -> bool:
-    provider = (getattr(settings, "rag_embeddings_provider", "gemini") or "gemini").strip().lower()
-
-    if provider == "hf":
-        try:
-            from langchain_huggingface import HuggingFaceEmbeddings  # noqa: F401
-        except Exception:
-            return False
-        return True
-
-    if provider == "openai":
-        api_key = (getattr(settings, "openai_api_key", None) or "").strip()
-        if not api_key:
-            return False
-        try:
-            from langchain_openai import OpenAIEmbeddings  # noqa: F401
-        except Exception:
-            return False
-        return True
-
-    # Default: Gemini
-    api_key = (settings.google_api_key or "").strip()
+    api_key = (getattr(settings, "openai_api_key", None) or "").strip()
     if not api_key:
         return False
     try:
-        from langchain_google_genai import GoogleGenerativeAIEmbeddings  # noqa: F401
+        from langchain_openai import OpenAIEmbeddings  # noqa: F401
     except Exception:
         return False
     return True
@@ -112,12 +92,8 @@ async def rag_status(
     return RagStatusResponse(
         rag_enabled=bool(settings.rag_enabled),
         embeddings_configured=_embeddings_configured(settings),
-        embeddings_provider=str(getattr(settings, "rag_embeddings_provider", "gemini")),
-        embeddings_model=(
-            str(getattr(settings, "rag_local_embedding_model", None))
-            if str(getattr(settings, "rag_embeddings_provider", "gemini")).strip().lower() == "hf"
-            else str(getattr(settings, "rag_embedding_model", None))
-        ),
+        embeddings_provider="openai",
+        embeddings_model=str(getattr(settings, "rag_embedding_model", None)),
         s3_configured=bool(settings.s3_bucket),
         course_file_count=file_count,
         chunks_total=chunks_total,

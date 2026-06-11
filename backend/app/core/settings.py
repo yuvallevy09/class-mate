@@ -60,42 +60,37 @@ class Settings(BaseSettings):
     runpod_use_runsync: bool = Field(default=True, validation_alias="RUNPOD_USE_RUNSYNC")
     runpod_whisper_model: str = Field(default="base", validation_alias="RUNPOD_WHISPER_MODEL")
 
-    # LLM (Gemini via Google API key)
+    # LLM provider selection
+    # - "gemini": gemini_model via GOOGLE_API_KEY (dev default)
+    # - "anthropic": anthropic_model via ANTHROPIC_API_KEY (prod)
+    # Flip LLM_PROVIDER=anthropic (and set ANTHROPIC_API_KEY) to switch.
+    llm_provider: Literal["gemini", "anthropic"] = Field(default="gemini", validation_alias="LLM_PROVIDER")
     google_api_key: str | None = Field(default=None, validation_alias="GOOGLE_API_KEY")
     gemini_model: str = Field(default="gemini-2.5-flash", validation_alias="GEMINI_MODEL")
+    anthropic_api_key: str | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
+    anthropic_model: str = Field(default="claude-sonnet-4-6", validation_alias="ANTHROPIC_MODEL")
 
-    # OpenAI
+    # OpenAI (embeddings)
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     chat_history_max_messages: int = Field(default=12, validation_alias="CHAT_HISTORY_MAX_MESSAGES")
     chat_temperature: float = Field(default=0.0, validation_alias="CHAT_TEMPERATURE")
 
-    # RAG (local-first, persisted to disk)
+    # RAG (retrieval corpus lives in Postgres/pgvector)
     rag_enabled: bool = Field(default=True, validation_alias="RAG_ENABLED")
     rag_top_k: int = Field(default=4, validation_alias="RAG_TOP_K")
     rag_chunk_size: int = Field(default=1200, validation_alias="RAG_CHUNK_SIZE")
     rag_chunk_overlap: int = Field(default=200, validation_alias="RAG_CHUNK_OVERLAP")
-    rag_embedding_model: str = Field(default="models/embedding-001", validation_alias="RAG_EMBEDDING_MODEL")
-
-    # RAG embeddings provider
-    # - "gemini": uses GoogleGenerativeAIEmbeddings (requires GOOGLE_API_KEY + quota)
-    # - "hf": uses HuggingFaceEmbeddings (local, no quota; heavier dependency)
-    # - "openai": uses OpenAIEmbeddings (requires OPENAI_API_KEY)
-    rag_embeddings_provider: Literal["gemini", "hf", "openai"] = Field(
-        default="gemini", validation_alias="RAG_EMBEDDINGS_PROVIDER"
-    )
-    rag_local_embedding_model: str = Field(
-        default="sentence-transformers/all-MiniLM-L6-v2",
-        validation_alias="RAG_LOCAL_EMBEDDING_MODEL",
-    )
+    # OpenAI embeddings only. Dimensionality must match EMBEDDING_DIMS (pgvector
+    # schema) — changing models to a different dimension requires a migration + reindex.
+    rag_embedding_model: str = Field(default="text-embedding-3-small", validation_alias="RAG_EMBEDDING_MODEL")
 
     # DSPy tracing (MLflow autolog; dev-only observability for DSPy modules).
     # Requires the `mlflow` dev dependency; ignored in production installs without it.
     dspy_tracing_enabled: bool = Field(default=False, validation_alias="DSPY_TRACING_ENABLED")
 
-    # DSPy router (intent routing for retrieval vs general answering)
+    # DSPy router (intent routing for retrieval vs general answering).
+    # Uses the configured LLM provider (see llm_provider above).
     dspy_router_enabled: bool = Field(default=False, validation_alias="DSPY_ROUTER_ENABLED")
-    # DSPy uses LiteLLM-style model identifiers.
-    dspy_router_model: str = Field(default="gemini/gemini-2.0-flash", validation_alias="DSPY_ROUTER_MODEL")
 
     # JWT / cookies
     jwt_secret: str = Field(default="dev-change-me", validation_alias="JWT_SECRET")

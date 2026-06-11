@@ -25,7 +25,7 @@ from typing import Any
 import dspy
 from pydantic import BaseModel, Field
 
-from app.ai.dspy_chat import _effective_gemini_api_key, _litellm_gemini_model
+from app.ai.llm import build_lm
 from app.core.settings import Settings, get_settings
 
 
@@ -109,12 +109,10 @@ class CourseSummaryGenerator(dspy.Module):
     def _get_lm(self) -> dspy.LM:
         if self._lm is None:
             settings: Settings = get_settings()
-            _effective_gemini_api_key(settings)  # fails fast if the key is missing
-            self._lm = dspy.LM(
-                model=_litellm_gemini_model(settings.gemini_model),
+            self._lm = build_lm(
+                settings,
                 temperature=float(settings.chat_temperature),
                 max_tokens=_DEFAULT_MAX_TOKENS,
-                num_retries=2,
             )
         return self._lm
 

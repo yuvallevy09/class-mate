@@ -44,7 +44,6 @@ def _run_migrations_sync() -> None:
 async def test_transcript_segments_are_ingested_into_content_chunks(monkeypatch) -> None:
     # Ensure no external embedding calls during test.
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setenv("RAG_EMBEDDINGS_PROVIDER", "openai")
     get_settings.cache_clear()
     settings = get_settings()
 

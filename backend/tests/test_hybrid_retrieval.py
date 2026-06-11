@@ -42,9 +42,8 @@ def _run_migrations_sync() -> None:
 
 @pytest.mark.asyncio
 async def test_hybrid_retrieval_falls_back_to_lexical_when_no_embeddings(monkeypatch) -> None:
-    # Ensure embeddings provider isn't configured so semantic retrieval returns empty.
+    # Ensure embeddings aren't configured so semantic retrieval returns empty.
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setenv("RAG_EMBEDDINGS_PROVIDER", "openai")
     get_settings.cache_clear()
     settings = get_settings()
 
@@ -112,7 +111,6 @@ async def test_hybrid_retrieval_falls_back_to_lexical_when_no_embeddings(monkeyp
 async def test_hybrid_retrieval_neighbor_expansion_adds_adjacent_chunks(monkeypatch) -> None:
     # Disable embeddings to force lexical-only retrieval.
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setenv("RAG_EMBEDDINGS_PROVIDER", "openai")
     get_settings.cache_clear()
     settings = get_settings()
 

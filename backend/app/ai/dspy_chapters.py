@@ -5,22 +5,8 @@ from typing import Any
 
 import dspy
 
+from app.ai.llm import build_lm
 from app.core.settings import Settings
-
-
-def _effective_gemini_api_key(settings: Settings) -> str:
-    key = (settings.google_api_key or "").strip()
-    if not key:
-        raise ValueError("Missing Gemini API key. Set GOOGLE_API_KEY in backend/.env.")
-    return key
-
-
-def _litellm_gemini_model(model: str) -> str:
-    m = (model or "").strip() or "gemini-2.5-flash"
-    # DSPy uses LiteLLM model identifiers. Gemini is typically "gemini/<model>".
-    if "/" in m:
-        return m
-    return f"gemini/{m}"
 
 
 class _ChapterizeSig(dspy.Signature):
@@ -56,8 +42,7 @@ def generate_chapters_dspy(*, settings: Settings, blocks: list[dict[str, Any]]) 
 
     Raises ValueError if not configured (missing key). Other errors may propagate.
     """
-    _effective_gemini_api_key(settings)  # validate early
-    lm = dspy.LM(model=_litellm_gemini_model(settings.gemini_model), temperature=0.0, max_tokens=700, num_retries=2)
+    lm = build_lm(settings, temperature=0.0, max_tokens=700)
     pred = dspy.Predict(_ChapterizeSig)
 
     # Compact representation to keep token usage bounded.

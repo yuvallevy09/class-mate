@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import dspy
 from json_repair import repair_json
 
+from app.ai.llm import build_lm
 from app.core.settings import Settings
 
 
@@ -50,7 +51,7 @@ class _RouteSig(dspy.Signature):
     decision_json: str = dspy.OutputField(desc="JSON object as specified in the instructions")
 
 
-class GeminiRouter(dspy.Module):
+class IntentRouter(dspy.Module):
     def __init__(self) -> None:
         super().__init__()
         self._predict = dspy.Predict(_RouteSig)
@@ -86,10 +87,9 @@ def route_message(*, settings: Settings, course_name: str, course_description: s
     """
     Best-effort router. Never raises: on failure, falls back to a conservative 'mixed' decision.
     """
-    model = (getattr(settings, "dspy_router_model", None) or "gemini/gemini-2.0-flash").strip()
     try:
-        lm = dspy.LM(model=model, temperature=0.0, max_tokens=350, num_retries=1)
-        router = GeminiRouter()
+        lm = build_lm(settings, temperature=0.0, max_tokens=350, num_retries=1)
+        router = IntentRouter()
         with dspy.settings.context(lm=lm):
             raw = router(
                 course_name=str(course_name or "").strip(),
