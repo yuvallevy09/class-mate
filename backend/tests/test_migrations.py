@@ -83,7 +83,8 @@ def test_alembic_upgrade_creates_users_table() -> None:
     command.upgrade(cfg, "head")
 
     assert asyncio.run(_users_table_exists(settings.database_url)) is True
-    assert asyncio.run(_table_exists(settings.database_url, table_name="document_pages")) is True
+    # document_pages was dropped in 0022 (video-only v1 pivot).
+    assert asyncio.run(_table_exists(settings.database_url, table_name="document_pages")) is False
     assert asyncio.run(_table_exists(settings.database_url, table_name="content_chunks")) is True
 
 

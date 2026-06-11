@@ -111,7 +111,7 @@ async def test_delete_content_deletes_s3_object(monkeypatch) -> None:
     content = await _create_content(
         settings.database_url,
         course_id=course.id,
-        category="notes",
+        category="media",
         title="Note",
         file_key="users/1/courses/x/file.txt",
     )

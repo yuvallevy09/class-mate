@@ -67,7 +67,7 @@ async def test_hybrid_retrieval_falls_back_to_lexical_when_no_embeddings(monkeyp
             await session.commit()
             await session.refresh(course)
 
-            content = CourseContent(course_id=course.id, category="notes", title="Lecture", description=None)
+            content = CourseContent(course_id=course.id, category="media", title="Lecture", description=None)
             session.add(content)
             await session.commit()
             await session.refresh(content)
@@ -78,7 +78,7 @@ async def test_hybrid_retrieval_falls_back_to_lexical_when_no_embeddings(monkeyp
                     ContentChunk(
                         course_id=course.id,
                         content_id=content.id,
-                        category="notes",
+                        category="media",
                         chunk_index=0,
                         text="Matrix multiplication is associative.",
                         meta={"doc_type": "pdf", "page_start": 1, "page_end": 1},
@@ -86,7 +86,7 @@ async def test_hybrid_retrieval_falls_back_to_lexical_when_no_embeddings(monkeyp
                     ContentChunk(
                         course_id=course.id,
                         content_id=content.id,
-                        category="notes",
+                        category="media",
                         chunk_index=1,
                         text="A stack is a LIFO data structure.",
                         meta={"doc_type": "pdf", "page_start": 2, "page_end": 2},

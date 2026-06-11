@@ -63,31 +63,31 @@ async def test_postgres_retrieve_filters_by_category(monkeypatch) -> None:
             await session.commit()
             await session.refresh(course)
 
-            content_exam = CourseContent(course_id=course.id, category="exams", title="Midterm", description=None)
-            content_notes = CourseContent(course_id=course.id, category="notes", title="Lecture", description=None)
-            session.add_all([content_exam, content_notes])
+            content_a = CourseContent(course_id=course.id, category="media", title="Lecture 1", description=None)
+            content_b = CourseContent(course_id=course.id, category="media", title="Lecture 2", description=None)
+            session.add_all([content_a, content_b])
             await session.commit()
-            await session.refresh(content_exam)
-            await session.refresh(content_notes)
+            await session.refresh(content_a)
+            await session.refresh(content_b)
 
             # Insert a couple chunks with overlapping vocabulary.
             session.add_all(
                 [
                     ContentChunk(
                         course_id=course.id,
-                        content_id=content_exam.id,
-                        category="exams",
+                        content_id=content_a.id,
+                        category="media",
                         chunk_index=0,
                         text="Question 1: Define eigenvalues and eigenvectors.",
-                        meta={"page_start": 1, "page_end": 1, "source_kind": "pdf"},
+                        meta={"page_start": 1, "page_end": 1, "source_kind": "segment"},
                     ),
                     ContentChunk(
                         course_id=course.id,
-                        content_id=content_notes.id,
-                        category="notes",
+                        content_id=content_b.id,
+                        category="media",
                         chunk_index=0,
                         text="Eigenvalues appear in diagonalization.",
-                        meta={"page_start": 5, "page_end": 5, "source_kind": "pdf"},
+                        meta={"page_start": 5, "page_end": 5, "source_kind": "segment"},
                     ),
                 ]
             )
@@ -98,11 +98,17 @@ async def test_postgres_retrieve_filters_by_category(monkeypatch) -> None:
             )
             assert len(hits_all) >= 2
 
-            hits_exams = await retrieve_course_chunk_hits(
-                db=session, course_id=course.id, query="eigenvalues", top_k=10, categories=["exams"]
+            hits_media = await retrieve_course_chunk_hits(
+                db=session, course_id=course.id, query="eigenvalues", top_k=10, categories=["media"]
             )
-            assert len(hits_exams) >= 1
-            assert all(h.metadata.get("category") == "exams" for h in hits_exams)
+            assert len(hits_media) >= 1
+            assert all(h.metadata.get("category") == "media" for h in hits_media)
+
+            # A non-matching category filter excludes everything.
+            hits_other = await retrieve_course_chunk_hits(
+                db=session, course_id=course.id, query="eigenvalues", top_k=10, categories=["notes"]
+            )
+            assert hits_other == []
 
     finally:
         await engine.dispose()

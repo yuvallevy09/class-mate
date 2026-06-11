@@ -130,7 +130,7 @@ async def test_course_content_title_and_category_required_and_s3_guard(monkeypat
 
             missing_title = await client.post(
                 f"/api/v1/courses/{course_id}/contents",
-                json={"category": "notes", "title": "   "},
+                json={"category": "media", "title": "   "},
                 headers={settings.csrf_header_name: token},
             )
             assert missing_title.status_code == 422
@@ -144,7 +144,7 @@ async def test_course_content_title_and_category_required_and_s3_guard(monkeypat
 
             invalid_category = await client.post(
                 f"/api/v1/courses/{course_id}/contents",
-                json={"category": "past_exams", "title": "Old label"},
+                json={"category": "notes", "title": "Removed category"},
                 headers={settings.csrf_header_name: token},
             )
             assert invalid_category.status_code == 422
@@ -153,7 +153,7 @@ async def test_course_content_title_and_category_required_and_s3_guard(monkeypat
             with_file = await client.post(
                 f"/api/v1/courses/{course_id}/contents",
                 json={
-                    "category": "notes",
+                    "category": "media",
                     "title": "File note",
                     "file_key": "users/1/courses/x/file.txt",
                     "original_filename": "file.txt",
@@ -167,7 +167,7 @@ async def test_course_content_title_and_category_required_and_s3_guard(monkeypat
             # But creating metadata-only content should still work with no S3 config.
             ok = await client.post(
                 f"/api/v1/courses/{course_id}/contents",
-                json={"category": "notes", "title": "Plain note", "description": "hi"},
+                json={"category": "media", "title": "Plain note", "description": "hi"},
                 headers={settings.csrf_header_name: token},
             )
             assert ok.status_code == 200

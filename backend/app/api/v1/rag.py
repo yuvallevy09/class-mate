@@ -29,7 +29,6 @@ class RagStatusResponse(BaseModel):
     embeddings_model: str | None
     s3_configured: bool
     course_file_count: int
-    course_pdf_count: int
     chunks_total: int
     chunks_with_embeddings: int
 
@@ -92,18 +91,11 @@ async def rag_status(
 ) -> RagStatusResponse:
     await _ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
 
-    # Count file-backed contents (and PDFs) for a quick sanity check.
+    # Count file-backed contents for a quick sanity check.
     res = await db.execute(
         select(CourseContent).where(CourseContent.course_id == course_id, CourseContent.file_key.is_not(None))
     )
-    contents = list(res.scalars().all())
-    file_count = len(contents)
-    pdf_count = 0
-    for c in contents:
-        mt = (c.mime_type or "").lower().strip()
-        name = (c.original_filename or "").lower().strip()
-        if ("pdf" in mt) or name.endswith(".pdf"):
-            pdf_count += 1
+    file_count = len(list(res.scalars().all()))
 
     # Chunk stats (retrieval corpus lives in Postgres now).
     cres = await db.execute(
@@ -128,7 +120,6 @@ async def rag_status(
         ),
         s3_configured=bool(settings.s3_bucket),
         course_file_count=file_count,
-        course_pdf_count=pdf_count,
         chunks_total=chunks_total,
         chunks_with_embeddings=chunks_with_embeddings,
     )

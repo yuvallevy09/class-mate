@@ -33,8 +33,7 @@ class _RouteSig(dspy.Signature):
       "needs_web": true|false,
       "clarifying_questions": ["...", "..."],   // up to 2
       "retrieval_hints": {                      // optional
-        "doc_types": ["pdf","slides","segment"],
-        "categories": ["notes","exams","homework"],
+        "doc_types": ["segment"],
         "lecture_ref": "Lecture 3",
         "time_ref": "27:36",
         "assignment_ref": "HW2",

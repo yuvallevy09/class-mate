@@ -99,6 +99,12 @@ async def presign_upload(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File too large")
 
     content_type = (body.contentType or "").strip() or "application/octet-stream"
+    # v1 is lecture-video-only: nothing else gets ingested, so don't accept it.
+    if not content_type.lower().startswith("video/"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only video uploads are supported",
+        )
     safe_name = _sanitize_filename(body.filename)
     key = f"users/{current_user.id}/courses/{course.id}/{uuid4()}_{safe_name}"
 
