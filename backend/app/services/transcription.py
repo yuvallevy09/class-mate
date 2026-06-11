@@ -87,6 +87,41 @@ def _ffmpeg_extract_thumbnail(
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def _thumbnail_key(*, course_id: UUID, video_asset_id: UUID) -> str:
+    return f"courses/{course_id}/video-assets/{video_asset_id}/thumbnail.jpg"
+
+
+def extract_and_upload_thumbnail(
+    *,
+    s3,
+    settings: Settings,
+    video_path: Path,
+    course_id: UUID,
+    video_asset_id: UUID,
+) -> str:
+    """Extract one frame from a local video file and upload it as the asset thumbnail.
+
+    Blocking (ffmpeg subprocess + S3 upload); call via asyncio.to_thread from async code.
+    Returns the uploaded thumbnail key.
+    """
+    thumbnail_path = video_path.parent / "thumbnail.jpg"
+    _ffmpeg_extract_thumbnail(
+        ffmpeg_bin=settings.ffmpeg_bin,
+        video_path=video_path,
+        thumbnail_path=thumbnail_path,
+        seek_seconds=float(settings.thumbnail_seek_seconds),
+    )
+    key = _thumbnail_key(course_id=course_id, video_asset_id=video_asset_id)
+    with thumbnail_path.open("rb") as f:
+        s3.upload_fileobj(
+            f,
+            settings.s3_bucket,
+            key,
+            ExtraArgs={"ContentType": "image/jpeg"},
+        )
+    return key
+
+
 class RunpodClient:
     """Minimal Runpod serverless client (submit + poll).
 
@@ -277,6 +312,24 @@ async def transcribe_video_asset(*, video_asset_id: UUID, requested_language: st
                         s3.download_fileobj(settings.s3_bucket, asset.source_file_key, f)
 
                 await asyncio.to_thread(_download)
+
+                # Best-effort thumbnail for the library UI; never fail the pipeline over it.
+                if not asset.thumbnail_file_key:
+                    try:
+                        await asyncio.to_thread(
+                            extract_and_upload_thumbnail,
+                            s3=s3,
+                            settings=settings,
+                            video_path=video_path,
+                            course_id=asset.course_id,
+                            video_asset_id=asset.id,
+                        )
+                        asset.thumbnail_file_key = _thumbnail_key(
+                            course_id=asset.course_id, video_asset_id=asset.id
+                        )
+                        await db.commit()
+                    except Exception:
+                        pass
 
                 # Extract audio.
                 asset.status = "extracting_audio"

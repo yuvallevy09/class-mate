@@ -34,6 +34,8 @@ class VideoAssetPublic(BaseModel):
     mime_type: str | None
     size_bytes: int | None
     audio_file_key: str | None
+    # Presigned GET URL for the stored thumbnail (set by the API layer, not a DB column).
+    thumbnail_url: str | None = None
 
     transcription_job_id: str | None
     transcription_error: str | None

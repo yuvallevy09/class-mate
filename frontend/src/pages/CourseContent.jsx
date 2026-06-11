@@ -33,6 +33,21 @@ const FILE_ICONS = {
   default: File
 };
 
+function VideoThumbnail({ src, alt, className, fallback }) {
+  const [failed, setFailed] = useState(false);
+  React.useEffect(() => setFailed(false), [src]);
+  if (!src || failed) return fallback;
+  return (
+    <img
+      src={src}
+      alt={alt}
+      loading="lazy"
+      className={className}
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 export default function CourseContent() {
   const navigate = useNavigate();
   const urlParams = new URLSearchParams(window.location.search);
@@ -414,9 +429,20 @@ export default function CourseContent() {
                       </Button>
                       
                       <div className={viewMode === "grid" ? "" : "flex items-start gap-4"}>
-                        <div className={`${viewMode === "grid" ? "w-12 h-12 mb-5" : "w-12 h-12"} rounded-xl bg-gradient-to-br from-pink-500/20 via-purple-500/20 to-blue-500/20 flex items-center justify-center shrink-0`}>
-                          <IconComponent className="w-6 h-6 text-purple-400" />
-                        </div>
+                        <VideoThumbnail
+                          src={isVideo ? asset?.thumbnail_url || null : null}
+                          alt={item.title}
+                          className={
+                            viewMode === "grid"
+                              ? "w-full aspect-video object-cover rounded-xl mb-5 bg-black/40"
+                              : "w-20 h-12 object-cover rounded-lg shrink-0 bg-black/40"
+                          }
+                          fallback={
+                            <div className={`${viewMode === "grid" ? "w-12 h-12 mb-5" : "w-12 h-12"} rounded-xl bg-gradient-to-br from-pink-500/20 via-purple-500/20 to-blue-500/20 flex items-center justify-center shrink-0`}>
+                              <IconComponent className="w-6 h-6 text-purple-400" />
+                            </div>
+                          }
+                        />
                         
                         <div className="flex-1">
                           <h3 className="font-semibold mb-2 pr-8">{item.title}</h3>

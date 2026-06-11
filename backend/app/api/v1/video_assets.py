@@ -22,7 +22,7 @@ from app.schemas.transcript_segment import TranscriptSegmentPublic
 from app.schemas.course_content import CourseContentPublic
 from app.schemas.video_chapter import VideoChapterPublic
 from app.schemas.video_asset import VideoAssetCreate, VideoAssetPublic
-from app.services.transcription import transcribe_video_asset
+from app.services.transcription import _s3_client, transcribe_video_asset
 from app.services.lecture_artifacts import generate_and_store_lecture_artifacts
 
 router = APIRouter(tags=["video-assets"])
@@ -132,17 +132,40 @@ def _enforce_asset_content_invariants(
         )
 
 
+def _to_public_with_thumbnail(asset: VideoAsset, *, settings: Settings, s3=None) -> VideoAssetPublic:
+    pub = VideoAssetPublic.model_validate(asset)
+    if asset.thumbnail_file_key and settings.s3_bucket:
+        try:
+            client = s3 if s3 is not None else _s3_client(settings)
+            pub.thumbnail_url = client.generate_presigned_url(
+                ClientMethod="get_object",
+                Params={"Bucket": settings.s3_bucket, "Key": asset.thumbnail_file_key},
+                ExpiresIn=int(settings.s3_download_expires_seconds),
+            )
+        except Exception:
+            # Thumbnails are decorative; never fail the request over a presign error.
+            pass
+    return pub
+
+
 @router.get("/courses/{course_id}/video-assets", response_model=list[VideoAssetPublic])
 async def list_video_assets(
     course_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> list[VideoAsset]:
+    settings: Settings = Depends(get_settings),
+) -> list[VideoAssetPublic]:
     await _get_owned_course(db, course_id=course_id, user_id=current_user.id)
     res = await db.execute(
         select(VideoAsset).where(VideoAsset.course_id == course_id).order_by(VideoAsset.created_at.desc())
     )
-    return list(res.scalars().all())
+    assets = list(res.scalars().all())
+    s3 = (
+        _s3_client(settings)
+        if settings.s3_bucket and any(a.thumbnail_file_key for a in assets)
+        else None
+    )
+    return [_to_public_with_thumbnail(a, settings=settings, s3=s3) for a in assets]
 
 
 @router.post("/courses/{course_id}/video-assets", response_model=VideoAssetPublic)
@@ -371,7 +394,8 @@ async def get_video_asset(
     video_asset_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> VideoAsset:
+    settings: Settings = Depends(get_settings),
+) -> VideoAssetPublic:
     res = await db.execute(
         select(VideoAsset, Course)
         .join(Course, Course.id == VideoAsset.course_id)
@@ -380,7 +404,7 @@ async def get_video_asset(
     row = res.first()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video asset not found")
-    return row[0]
+    return _to_public_with_thumbnail(row[0], settings=settings)
 
 
 @router.get("/video-assets/{video_asset_id}/segments", response_model=list[TranscriptSegmentPublic])
