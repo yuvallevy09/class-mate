@@ -121,28 +121,15 @@ export default function CourseSidebar({
                   </h3>
                   <div className="space-y-2">
                     {COURSE_SIDEBAR_ITEMS.map((item) => {
-                      const isVideos = item.id === "media";
-
-                      if (!isVideos) {
-                        return (
-                          <div
-                            key={item.id}
-                            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-gray-500 bg-white/0 border border-white/0 cursor-not-allowed"
-                            aria-disabled="true"
-                          >
-                            <item.icon className="w-5 h-5 text-gray-600" />
-                            <span className="text-sm font-medium">{item.label}</span>
-                            <span className="ml-auto text-xs text-gray-600">Coming Soon</span>
-                          </div>
-                        );
-                      }
+                      const itemUrl =
+                        item.id === "overview"
+                          ? `CourseOverview?id=${courseId}`
+                          : `CourseContent?courseId=${courseId}&category=${item.id}`;
 
                       return (
                         <Link
                           key={item.id}
-                          to={createPageUrl(
-                            `CourseContent?courseId=${courseId}&category=${item.id}`
-                          )}
+                          to={createPageUrl(itemUrl)}
                           onClick={() => onClose?.()}
                         >
                           <motion.button

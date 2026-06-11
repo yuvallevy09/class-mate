@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
-import { createPageUrl } from "@/utils";
+import { createPageUrl, courseGradient, GRADIENT_COLORS } from "@/utils";
 import { listCourses, createCourse, deleteCourse } from "@/api/courses";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
@@ -22,15 +22,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import Navbar from "@/components/Navbar";
-
-const GRADIENT_COLORS = [
-  "from-pink-500 to-purple-600",
-  "from-purple-500 to-blue-600",
-  "from-blue-500 to-cyan-500",
-  "from-cyan-500 to-teal-500",
-  "from-orange-500 to-pink-500",
-  "from-violet-500 to-purple-600"
-];
 
 function sortCoursesNewestFirst(items) {
   const arr = Array.isArray(items) ? [...items] : [];
@@ -76,20 +67,9 @@ export default function Courses() {
     },
   });
 
-  const hashString = (s) => {
-    let h = 0;
-    for (let i = 0; i < s.length; i += 1) {
-      h = ((h << 5) - h) + s.charCodeAt(i);
-      h |= 0; // keep 32-bit
-    }
-    return Math.abs(h);
-  };
-
   const coursesWithColor = courses.map((course) => ({
     ...course,
-    color:
-      course.color ||
-      GRADIENT_COLORS[hashString(String(course.id || "")) % GRADIENT_COLORS.length],
+    color: course.color || courseGradient(course.id),
   }));
 
   const filteredCourses = coursesWithColor.filter(course =>
@@ -219,7 +199,7 @@ export default function Courses() {
                     whileHover={{ y: -5, scale: 1.02 }}
                     className="group"
                   >
-                    <Link to={createPageUrl(`CourseChat?id=${course.id}`)}>
+                    <Link to={createPageUrl(`CourseOverview?id=${course.id}`)}>
                       <div className="glass-card rounded-2xl p-6 h-full cursor-pointer hover:border-purple-500/30 transition-all duration-300 hover:neon-glow relative">
                         <Button
                           type="button"

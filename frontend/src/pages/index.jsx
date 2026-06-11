@@ -6,6 +6,8 @@ import Courses from "./Courses";
 
 import CourseChat from "./CourseChat";
 
+import CourseOverview from "./CourseOverview";
+
 import CourseContent from "./CourseContent";
 
 import VideoPlayer from "./VideoPlayer";
@@ -23,7 +25,9 @@ const PAGES = {
     Courses: Courses,
     
     CourseChat: CourseChat,
-    
+
+    CourseOverview: CourseOverview,
+
     CourseContent: CourseContent,
 
     VideoPlayer: VideoPlayer,
@@ -65,7 +69,9 @@ function PagesContent() {
                 <Route path="/Courses" element={<RequireAuth><Courses /></RequireAuth>} />
                 
                 <Route path="/CourseChat" element={<RequireAuth><CourseChat /></RequireAuth>} />
-                
+
+                <Route path="/CourseOverview" element={<RequireAuth><CourseOverview /></RequireAuth>} />
+
                 <Route path="/CourseContent" element={<RequireAuth><CourseContent /></RequireAuth>} />
 
                 <Route path="/VideoPlayer" element={<RequireAuth><VideoPlayer /></RequireAuth>} />

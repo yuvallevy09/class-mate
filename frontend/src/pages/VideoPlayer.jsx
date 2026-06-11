@@ -393,11 +393,11 @@ export default function VideoPlayer() {
   const [message, setMessage] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [messages, setMessages] = useState([]);
-  const [isTranscriptOpen, setIsTranscriptOpen] = useState(true);
-  const [isChatOpen, setIsChatOpen] = useState(true);
+  const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
+  const [isChatOpen, setIsChatOpen] = useState(false);
   const [isChatPopoutOpen, setIsChatPopoutOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [isSummaryExpanded, setIsSummaryExpanded] = useState(true);
+  const [isSummaryExpanded, setIsSummaryExpanded] = useState(false);
 
   const messagesEndRef = useRef(null);
   const chatScrollRef = useRef(null);
@@ -463,7 +463,7 @@ export default function VideoPlayer() {
     setMessage("");
     setIsTyping(false);
     setMessages([]);
-    setIsSummaryExpanded(true);
+    setIsSummaryExpanded(false);
   }, [courseId, contentId]);
 
   const seekToSeconds = (seconds) => {
