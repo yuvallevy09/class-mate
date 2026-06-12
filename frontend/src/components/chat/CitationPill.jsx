@@ -1,18 +1,33 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import CitationPopover from "./CitationPopover";
 
 /**
- * Inline citation pill with a hover/tap popover.
+ * Inline citation chip: "Lect 5: Backprop… +1" with a hover/tap popover.
+ * `indices` may carry several sources (merged adjacent markers); distinct
+ * sources page inside the popover and the chip shows "+N".
  * Hover: 70ms open intent; 220ms leave grace (cleared when entering content).
  * Click/tap toggles. `coordinator` is a shared mutable ref-object per message
  * ensuring only one popover is open at a time.
  */
-export default function CitationPill({ index, model, coordinator, popIn }) {
+export default function CitationPill({ indices = [], citationModel, coordinator, popIn }) {
   const [open, setOpen] = useState(false);
   const pillRef = useRef(null);
   const openTimer = useRef(null);
   const closeTimer = useRef(null);
+
+  // Distinct sources for this chip (same-group indices dedupe to one entry).
+  const models = useMemo(() => {
+    const seen = new Set();
+    const out = [];
+    for (const i of indices) {
+      const m = citationModel?.byIndex?.get(i);
+      if (!m || seen.has(m.groupKey)) continue;
+      seen.add(m.groupKey);
+      out.push(m);
+    }
+    return out;
+  }, [indices, citationModel]);
 
   useEffect(
     () => () => {
@@ -41,7 +56,9 @@ export default function CitationPill({ index, model, coordinator, popIn }) {
     closeTimer.current = setTimeout(doClose, 220);
   };
 
-  const displayNumber = model?.displayNumber ?? index;
+  const primary = models[0] || null;
+  const label = primary?.chipLabel || primary?.title || `Source ${indices[0] ?? ""}`;
+  const extraCount = Math.max(0, models.length - 1);
 
   return (
     <Popover open={open} onOpenChange={(o) => (o ? doOpen() : doClose())}>
@@ -52,24 +69,25 @@ export default function CitationPill({ index, model, coordinator, popIn }) {
           onMouseEnter={handleEnter}
           onMouseLeave={handleLeave}
           onClick={() => (open ? doClose() : doOpen())}
-          aria-label={`Source ${displayNumber}${model?.title ? `: ${model.title}` : ""}`}
+          aria-label={`Source: ${label}${extraCount ? ` and ${extraCount} more` : ""}`}
           className={[
-            "mx-px inline-flex h-4 min-w-[17px] items-center justify-center rounded-full px-[5px] align-[1px]",
-            "font-mono text-[10px] font-medium leading-none transition-all duration-150",
+            "mx-0.5 inline-flex h-[17px] items-center justify-center gap-1 rounded-full px-[7px] align-[1px]",
+            "whitespace-nowrap font-mono text-[9.5px] font-medium leading-none transition-all duration-150",
             open
               ? "-translate-y-px bg-purple-500/30 text-purple-200 shadow-[inset_0_0_0_1px_rgba(139,92,246,0.55),0_0_14px_rgba(139,92,246,0.25)]"
               : "bg-purple-500/15 text-purple-300 shadow-[inset_0_0_0_1px_rgba(139,92,246,0.28)] hover:-translate-y-px hover:bg-purple-500/30 hover:text-purple-200 hover:shadow-[inset_0_0_0_1px_rgba(139,92,246,0.55),0_0_14px_rgba(139,92,246,0.25)]",
             popIn ? "cm-pop-in" : "",
           ].join(" ")}
         >
-          {displayNumber}
+          <span className="max-w-[95px] truncate">{label}</span>
+          {extraCount > 0 ? <span className="font-normal opacity-60">+{extraCount}</span> : null}
         </button>
       </PopoverAnchor>
-      {model ? (
+      {models.length ? (
         <PopoverContent
-          side="top"
+          side="bottom"
           sideOffset={8}
-          collisionPadding={12}
+          collisionPadding={{ top: 12, left: 12, right: 12, bottom: 108 }}
           onOpenAutoFocus={(e) => e.preventDefault()}
           onMouseEnter={() => clearTimeout(closeTimer.current)}
           onMouseLeave={handleLeave}
@@ -78,7 +96,7 @@ export default function CitationPill({ index, model, coordinator, popIn }) {
           }}
           className="w-[330px] max-w-[calc(100vw-24px)] rounded-2xl border-white/[0.13] bg-[#16151C]/90 p-4 text-left shadow-[0_16px_40px_rgba(0,0,0,0.55),0_0_32px_rgba(139,92,246,0.07)] backdrop-blur-xl"
         >
-          <CitationPopover model={model} />
+          <CitationPopover models={models} />
         </PopoverContent>
       ) : null}
     </Popover>

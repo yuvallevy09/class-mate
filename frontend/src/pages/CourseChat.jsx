@@ -5,7 +5,7 @@ import { getCourse } from "@/api/courses";
 import { listConversationMessages } from "@/api/chat";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, Sparkles } from "lucide-react";
+import { ArrowUp, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -321,20 +321,20 @@ export default function CourseChat() {
             </div>
           </div>
 
-          {/* Input Area */}
-          <div className="absolute inset-x-0 bottom-0 z-20 p-4 lg:p-6 border-t border-white/5 bg-black/40 backdrop-blur-md">
-            <div className="max-w-3xl mx-auto">
+          {/* Floating input bar */}
+          <div className="absolute inset-x-0 bottom-5 lg:bottom-7 z-20 px-4 pointer-events-none">
+            <div className="w-full max-w-[640px] mx-auto pointer-events-auto">
               {!chatEnabled && (
-                <div className="mb-3 text-xs text-gray-400">
+                <div className="mb-2 text-center text-xs text-gray-400">
                   Chat is disabled (set <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono">VITE_CHAT_ENABLED=true</code> to enable).
                 </div>
               )}
               {!!sendError && chatEnabled && (
-                <div className="mb-3 text-xs text-red-300/90">
+                <div className="mb-2 text-center text-xs text-red-300/90">
                   {sendError}
                 </div>
               )}
-              <div className="glass-card rounded-2xl p-2 flex items-end gap-2">
+              <div className="flex items-end gap-2.5 rounded-[22px] border border-white/10 bg-[#16151C]/80 py-1.5 pl-[18px] pr-1.5 backdrop-blur-xl shadow-[0_16px_40px_rgba(0,0,0,0.5),0_0_0_1px_rgba(0,0,0,0.25)]">
                 <Textarea
                   ref={textareaRef}
                   placeholder="Ask about your course..."
@@ -342,15 +342,15 @@ export default function CourseChat() {
                   onChange={(e) => setMessage(e.target.value)}
                   onKeyDown={handleKeyDown}
                   disabled={!chatEnabled}
-                  className="flex-1 bg-transparent border-0 text-white placeholder:text-gray-500 resize-none min-h-[44px] max-h-[120px] focus-visible:ring-0"
+                  className="flex-1 bg-transparent border-0 px-0 text-white placeholder:text-gray-500 resize-none min-h-[40px] max-h-[120px] focus-visible:ring-0"
                   rows={1}
                 />
                 <Button
                   onClick={handleSend}
                   disabled={!chatEnabled || !message.trim() || isPending}
-                  className="btn-gradient rounded-xl h-11 w-11 p-0 shrink-0"
+                  className="btn-gradient rounded-full h-9 w-9 p-0 shrink-0 mb-[3px]"
                 >
-                  <Send className="w-4 h-4" />
+                  <ArrowUp className="w-4 h-4" />
                 </Button>
               </div>
             </div>

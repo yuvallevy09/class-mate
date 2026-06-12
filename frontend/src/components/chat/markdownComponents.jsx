@@ -1,5 +1,6 @@
 import React from "react";
 import CitationPill from "./CitationPill";
+import { parseCiteHref } from "./citations";
 
 /**
  * Builds the ReactMarkdown components map for assistant messages.
@@ -28,15 +29,14 @@ export function buildMarkdownComponents({
         return null;
       }
 
-      // Citation markers (normalized `#cm-cite-N`, or legacy `#cm-src-N`
-      // that escaped normalization) render as pills.
-      const citeMatch = h.match(/^#cm-(?:cite|src)-(\d{1,3})$/);
-      if (citeMatch) {
-        const index = Number(citeMatch[1]);
+      // Citation markers (normalized `#cm-cite-N[-M…]`, or legacy `#cm-src-N`
+      // that escaped normalization) render as lecture chips.
+      const citeIndices = parseCiteHref(h);
+      if (citeIndices) {
         return (
           <CitationPill
-            index={index}
-            model={citationModel?.byIndex?.get(index)}
+            indices={citeIndices}
+            citationModel={citationModel}
             coordinator={coordinator}
             popIn={animatePills}
           />

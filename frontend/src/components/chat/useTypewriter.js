@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-const MARKER_RE = /\[\d{1,3}\]\(#cm-(?:cite|src)-\d{1,3}\)/g;
+const MARKER_RE = /\[\d{1,3}\]\(#cm-(?:cite|src)-[\d-]+\)/g;
 
 function atomicSpans(text) {
   const spans = [];

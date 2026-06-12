@@ -41,6 +41,13 @@ export function isRedundantChapterTitle(t) {
   return s.toLowerCase() === "full lecture";
 }
 
+/** Chip label: "Lect 5: Backpropagation…" from the lectureSlug + title. */
+function getChipLabel(extra, title) {
+  const slug = String(extra?.lectureSlug || "").trim();
+  const m = slug.match(/^L(\d+)$/i);
+  return m ? `Lect ${m[1]}: ${title}` : title;
+}
+
 function getPageLabel(extra) {
   const ps = extra?.pageStart ?? extra?.page_start ?? null;
   const pe = extra?.pageEnd ?? extra?.page_end ?? null;
@@ -118,17 +125,20 @@ export function buildCitationModel(citations = []) {
         displayNumber: g.leaderIndex,
         groupKey: `video:${g.contentId}`,
         title: g.title,
+        chipLabel: getChipLabel(extra, g.title),
         snippet,
         chapterTitle:
           (typeof extra?.chapterTitle === "string" && extra.chapterTitle.trim()) || null,
         ranges: Array.from(g.ranges.values()),
       });
     } else {
+      const title = getCitationTitle(c);
       byIndex.set(i, {
         kind: "file",
         displayNumber: i,
         groupKey: `file:${i}`,
-        title: getCitationTitle(c),
+        title,
+        chipLabel: title,
         snippet,
         pageLabel: getPageLabel(extra),
         url: typeof c?.url === "string" ? c.url : null,
@@ -139,10 +149,10 @@ export function buildCitationModel(citations = []) {
   return { byIndex };
 }
 
-const NORMALIZED_MARKER_RE = /\[(\d{1,3})\]\(#cm-cite-(\d{1,3})\)/g;
-
 /**
- * Normalizes citation markers in message content to `[N](#cm-cite-N)`.
+ * Normalizes citation markers in message content to the stable internal form
+ * `[N](#cm-cite-N)` — or, for runs of adjacent markers, one multi-source
+ * marker `[N](#cm-cite-N-M-…)` whose href carries every distinct source.
  * Idempotent — safe to run on already-normalized text.
  */
 export function normalizeCitationMarkers(content, citations = []) {
@@ -172,27 +182,62 @@ export function normalizeCitationMarkers(content, citations = []) {
     } while (text !== prev);
   }
 
-  // 3) Collapse whitespace-adjacent markers that resolve to the same group
-  //    (the rewritten format emits one link per video range: ¹ᵃ¹ᵇ → one pill).
+  // 3) Chips cite the sentence they follow: move any marker run that
+  //    directly precedes sentence punctuation to just after it.
+  text = text.replace(
+    /[ \t]*((?:\[\d{1,3}\]\(#cm-cite-[\d-]+\)[ \t]*)+)([.!?])/g,
+    (_m, markers, punct) => `${punct} ${markers.trim()}`
+  );
+
+  // 4) Merge whitespace-adjacent markers into ONE multi-source marker
+  //    `[N](#cm-cite-N-M-…)`, deduping sources that resolve to the same
+  //    group (e.g. two ranges of the same video). Distinct sources page
+  //    inside the popover (the chip shows "+N").
   const { byIndex } = buildCitationModel(citations);
+  const markerRe = /\[\d{1,3}\]\(#cm-cite-([\d-]+)\)/g;
   let out = "";
   let cursor = 0;
-  let lastEnd = -1;
-  let lastKey = null;
-  for (const m of text.matchAll(NORMALIZED_MARKER_RE)) {
-    const idx = Number(m[2]);
-    const key = byIndex.get(idx)?.groupKey ?? `i:${idx}`;
-    const adjacent = lastKey !== null && /^\s*$/.test(text.slice(lastEnd, m.index));
-    if (adjacent && key === lastKey) {
-      cursor = m.index + m[0].length;
-      lastEnd = cursor;
-      continue;
+  let run = null; // { indices: number[], keys: Set<string> }
+  const flushRun = () => {
+    if (!run) return;
+    out += `[${run.indices[0]}](#cm-cite-${run.indices.join("-")})`;
+    run = null;
+  };
+  for (const m of text.matchAll(markerRe)) {
+    const idxs = m[1]
+      .split("-")
+      .map(Number)
+      .filter((n) => Number.isFinite(n) && n >= 1);
+    if (!idxs.length) continue;
+    const between = text.slice(cursor, m.index);
+    if (run && /^\s*$/.test(between)) {
+      // extend the run; whitespace between merged markers is dropped
+    } else {
+      flushRun();
+      out += between;
+      run = { indices: [], keys: new Set() };
     }
-    out += text.slice(cursor, m.index) + m[0];
+    for (const i of idxs) {
+      const key = byIndex.get(i)?.groupKey ?? `i:${i}`;
+      if (!run.keys.has(key)) {
+        run.keys.add(key);
+        run.indices.push(i);
+      }
+    }
     cursor = m.index + m[0].length;
-    lastEnd = cursor;
-    lastKey = key;
   }
+  flushRun();
   out += text.slice(cursor);
   return out;
+}
+
+/** Parses a normalized marker href (`#cm-cite-1-3` / `#cm-src-2`) to indices. */
+export function parseCiteHref(href) {
+  const m = String(href || "").match(/^#cm-(?:cite|src)-([\d-]+)$/);
+  if (!m) return null;
+  const idxs = m[1]
+    .split("-")
+    .map(Number)
+    .filter((n) => Number.isFinite(n) && n >= 1);
+  return idxs.length ? idxs : null;
 }
