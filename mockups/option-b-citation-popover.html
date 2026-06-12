@@ -133,6 +133,12 @@
   }
   @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -120% 0; } }
 
+  /* verb swap: each new word fades up into place, shimmer keeps running */
+  .think-label.active.swap {
+    animation: shimmer 1.8s linear infinite, wordIn 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  @keyframes wordIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+
   .think-panel {
     display: grid; grid-template-rows: 0fr;
     transition: grid-template-rows 0.35s cubic-bezier(0.22, 1, 0.36, 1);
@@ -344,7 +350,8 @@
     <ul>
       <li><span class="old">Gradient user bubble + glass card around every assistant reply</span></li>
       <li>User bubble is quiet and neutral — no gradient anywhere in the thread</li>
-      <li>"Thinking" shimmer shows the model is working; the chevron expands a live reasoning stream, and it settles into a reviewable "Thought for Ns"</li>
+      <li>Status label reports real retrieval stages in order (searching → reading each lecture); whimsical verbs only fill the long generic stage, rotating every 2s</li>
+      <li>The chevron expands a live reasoning stream, and the label settles into a reviewable "Thought for Ns"</li>
       <li>Assistant text sits directly on the page, no bubble or header, and streams in letter by letter</li>
       <li>Citation pills pop in as the stream reaches them; popover shows lecture, chapter, transcript snippet</li>
       <li>Timestamp chips are the only action: one tap seeks the player to the cited moment</li>
@@ -496,6 +503,40 @@
   const thinkLabel = document.getElementById("think-label");
   const thinkText = document.getElementById("think-text");
 
+  // Honest retrieval statuses, shown in pipeline order. In the real app each
+  // maps to an actual backend stage (search → per-lecture transcript reads).
+  const RETRIEVAL_STAGES = [
+    { label: "Searching course materials", ms: 1200 },
+    { label: "Reading Lecture 5 — Backpropagation & the Chain Rule", ms: 1500 },
+    { label: "Reading Lecture 6 — Training Neural Networks", ms: 1500 },
+  ];
+
+  // Whimsy is reserved for the long generic stage, rotating in fixed order.
+  const WHIMSY = ["Thinking", "Pondering", "Marinating", "Percolating"];
+  const WHIMSY_SWAP_MS = 2000;
+  let verbTimer = null;
+
+  function setVerb(v) {
+    thinkLabel.textContent = v + "…";
+    thinkLabel.classList.remove("swap");
+    void thinkLabel.offsetWidth;   // restart the word-in animation
+    thinkLabel.classList.add("swap");
+  }
+
+  function startWhimsy() {
+    let i = 0;
+    setVerb(WHIMSY[0]);
+    verbTimer = setInterval(() => {
+      i = (i + 1) % WHIMSY.length;
+      setVerb(WHIMSY[i]);
+    }, WHIMSY_SWAP_MS);
+  }
+
+  function stopVerbs() {
+    clearInterval(verbTimer);
+    verbTimer = null;
+  }
+
   thinkToggle.addEventListener("click", () => {
     const open = think.classList.toggle("open");
     thinkToggle.setAttribute("aria-expanded", open);
@@ -542,21 +583,30 @@
     thinkText.textContent = "";
     think.classList.remove("open");
     thinkToggle.setAttribute("aria-expanded", "false");
-    thinkLabel.textContent = "Thinking";
+    stopVerbs();
     thinkLabel.classList.add("active");
 
-    // thinking streams (visible if the user expands the dropdown)
+    // 1) real retrieval stages, in pipeline order
     const t0 = performance.now();
-    await sleep(450);
-    for (const ch of THINKING) {
+    for (const stage of RETRIEVAL_STAGES) {
       if (gen !== generation) return;
-      thinkText.textContent += ch;
-      await sleep(".!?".includes(ch) ? 50 : 3 + Math.random() * 6);
+      setVerb(stage.label);
+      await sleep(stage.ms);
     }
     if (gen !== generation) return;
 
+    // 2) long generic stage: whimsy rotation + reasoning streams into the panel
+    startWhimsy();
+    for (const ch of THINKING) {
+      if (gen !== generation) { stopVerbs(); return; }
+      thinkText.textContent += ch;
+      await sleep(".!?".includes(ch) ? 50 : 7 + Math.random() * 8);
+    }
+    stopVerbs();
+    if (gen !== generation) return;
+
     const secs = Math.max(1, Math.round((performance.now() - t0) / 1000));
-    thinkLabel.classList.remove("active");
+    thinkLabel.classList.remove("active", "swap");
     thinkLabel.textContent = `Thought for ${secs}s`;
 
     await sleep(280);
