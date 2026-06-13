@@ -36,17 +36,29 @@ Notes:
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import re
 import time
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.chat_engine import ChatEngine
+from app.ai.stream_events import (
+    AnswerEvent,
+    CitationsEvent,
+    DoneEvent,
+    Event,
+    StatusEvent,
+    ThinkingEvent,
+)
 from app.ai.teaching_assistant import TeachingAssistant, get_teaching_assistant
 from app.api.deps import get_current_user
 from app.api.v1.chat import (
@@ -58,11 +70,13 @@ from app.api.v1.chat import (
 from app.core.settings import Settings, get_settings
 from app.db.models.chat_conversation import ChatConversation
 from app.db.models.chat_message import ChatMessage
+from app.db.models.course import Course
 from app.db.session import get_db, get_session_maker
 from app.schemas.chat import ChatCitation, CourseChatRequest, CourseChatResponse
 from app.schemas.retrieval import RetrievedDoc
 from app.services.conversation_history import build_conversation_history
 from app.services.course_info import build_course_info_cached
+from app.schemas.conversation_history import ConversationHistory
 
 router = APIRouter(tags=["chat-v2"])
 logger = logging.getLogger(__name__)
@@ -356,13 +370,15 @@ async def course_chat_v2(
     )
 
     # --- Persist assistant message + bump conversation activity ---
+    # Thinking is a live-only affordance (returned below for the current turn)
+    # and intentionally NOT persisted — no reasoning panel on reload.
     db.add(
         ChatMessage(
             conversation_id=conversation.id,
             role="assistant",
             content=reply_with_links,
             citations=[c.model_dump(mode="json") for c in citations] if citations else None,
-            thinking=thinking,
+            thinking=None,
         )
     )
     conversation.last_message_at = datetime.now(timezone.utc)
@@ -391,3 +407,251 @@ async def course_chat_v2(
         conversation_id=conversation.id,
         thinking=thinking,
     )
+
+
+# --- SSE streaming endpoint (M3) ---------------------------------------------
+#
+# Streams `TeachingAssistant.astream` events as Server-Sent Events, then persists
+# the assistant message — the streaming sibling of `course_chat_v2`. The non-
+# streaming endpoint above stays as the fallback.
+
+
+def _sse_frame(payload: dict) -> str:
+    """Serialize one event dict as an SSE `data:` frame."""
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _event_to_payload(ev: Event) -> dict | None:
+    """Map a typed stream event to its wire-JSON dict.
+
+    Returns `None` for `CitationsEvent` and `DoneEvent`: those are handled inline
+    in the generator (citations need async DB enrichment; done is emitted only
+    after persistence).
+    """
+    if isinstance(ev, StatusEvent):
+        return {"type": "status", "stage": ev.stage, "label": ev.label}
+    if isinstance(ev, ThinkingEvent):
+        return {"type": "thinking", "delta": ev.delta}
+    if isinstance(ev, AnswerEvent):
+        return {"type": "answer", "delta": ev.delta}
+    return None
+
+
+async def _persist_assistant_message(
+    *,
+    db: AsyncSession,
+    conversation_id: UUID,
+    answer: str,
+    citations: list[ChatCitation],
+) -> str:
+    """Format inline citation links, persist the assistant message, and bump
+    conversation activity. Shared by the streaming endpoint's success, error,
+    and disconnect paths. Returns the stored `reply_with_links` so the `done`
+    frame can hand the client the exact persisted text (which it normalizes to
+    match `turn.answer` for the live→persisted handoff).
+
+    Thinking is intentionally NOT persisted: the thought process is a live-only
+    affordance (streamed during the turn), so the saved message has `thinking`
+    NULL and no reasoning panel appears on reload.
+
+    `citations` is pre-enriched by the caller (the generator enriches once, at
+    the `CitationsEvent`, to send them before the answer).
+    """
+    normalized = _normalize_slug_citations(answer, citations)
+    reply_with_links = _format_reply_with_citation_links(normalized, citations)
+    db.add(
+        ChatMessage(
+            conversation_id=conversation_id,
+            role="assistant",
+            content=reply_with_links,
+            citations=[c.model_dump(mode="json") for c in citations] if citations else None,
+            thinking=None,
+        )
+    )
+    res = await db.execute(
+        select(ChatConversation).where(ChatConversation.id == conversation_id)
+    )
+    convo = res.scalar_one_or_none()
+    if convo is not None:
+        convo.last_message_at = datetime.now(timezone.utc)
+    await db.commit()
+    return reply_with_links
+
+
+@router.post("/courses/{course_id}/chat-v2/stream")
+async def course_chat_v2_stream(
+    course_id: UUID,
+    body: CourseChatRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+    ta: TeachingAssistant = Depends(get_teaching_assistant),
+) -> StreamingResponse:
+    # --- Pre-stream work on the request session (closes before the generator
+    # runs). All HTTPExceptions fire here, as normal JSON errors. ---
+    course = await _ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
+
+    conversation: ChatConversation | None = None
+    created_new_conversation = False
+    if body.conversation_id:
+        try:
+            convo_id = UUID(str(body.conversation_id))
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid conversationId"
+            )
+        res = await db.execute(
+            select(ChatConversation).where(
+                ChatConversation.id == convo_id,
+                ChatConversation.course_id == course.id,
+            )
+        )
+        conversation = res.scalar_one_or_none()
+        if conversation is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found"
+            )
+
+    if conversation is None:
+        conversation = ChatConversation(course_id=course.id, title=None)
+        db.add(conversation)
+        await db.flush()
+        created_new_conversation = True
+
+    max_n = int(settings.chat_history_max_messages)
+    history = await build_conversation_history(
+        db=db, conversation_id=conversation.id, max_n=max_n
+    )
+    db.add(ChatMessage(conversation_id=conversation.id, role="user", content=body.message))
+    if created_new_conversation:
+        await _maybe_generate_title(
+            settings=settings,
+            conversation=conversation,
+            first_user_message=body.message,
+            course_name=str(course.name),
+        )
+    await db.commit()
+
+    # Capture plain values for the generator — the request session `db` and any
+    # ORM objects bound to it are unusable once we return the StreamingResponse.
+    captured_course_id: UUID = course.id
+    captured_conversation_id: UUID = conversation.id
+    captured_history: ConversationHistory = history
+    user_query: str = body.message
+
+    async def _gen() -> AsyncIterator[str]:
+        SessionLocal = get_session_maker()
+        enriched_citations: list[ChatCitation] = []
+        answer_parts: list[str] = []
+        done: DoneEvent | None = None
+        try:
+            # Retrieval session (isolated; can raise Postgres errors).
+            async with SessionLocal() as ta_db:
+                res = await ta_db.execute(select(Course).where(Course.id == captured_course_id))
+                gen_course = res.scalar_one()  # ownership already verified above
+                course_info = await build_course_info_cached(db=ta_db, course=gen_course)
+                async for ev in ta.astream(
+                    db=ta_db,
+                    course_info=course_info,
+                    conversation_history=captured_history,
+                    user_query=user_query,
+                ):
+                    if isinstance(ev, CitationsEvent):
+                        # Enrich on a fresh session, then emit BEFORE answer
+                        # deltas (astream guarantees Citations precedes Answer).
+                        cites = _docs_to_citations(ev.docs)
+                        async with SessionLocal() as enrich_db:
+                            cites = await _attach_citation_urls(
+                                db=enrich_db, settings=settings,
+                                course_id=captured_course_id, citations=cites,
+                            )
+                            cites = await _attach_video_chapter_titles(
+                                db=enrich_db, course_id=captured_course_id, citations=cites,
+                            )
+                        enriched_citations = cites
+                        yield _sse_frame({
+                            "type": "citations",
+                            "citations": [c.model_dump(mode="json") for c in cites],
+                        })
+                        continue
+                    if isinstance(ev, DoneEvent):
+                        done = ev
+                        continue
+                    # Thinking streams live but is not persisted; only the answer
+                    # is accumulated (for the persistence safety net).
+                    if isinstance(ev, AnswerEvent):
+                        answer_parts.append(ev.delta)
+                    payload = _event_to_payload(ev)
+                    if payload is not None:
+                        yield _sse_frame(payload)
+
+            # Terminal: persist on a fresh write session, then emit `done`.
+            answer_text = (
+                (done.answer if done else "") or "".join(answer_parts) or _LLM_ERROR_FALLBACK
+            )
+            async with SessionLocal() as write_db:
+                reply_with_links = await _persist_assistant_message(
+                    db=write_db,
+                    conversation_id=captured_conversation_id,
+                    answer=answer_text,
+                    citations=enriched_citations,
+                )
+            logger.info(
+                "ta_stream_turn",
+                extra={
+                    "course_id": str(captured_course_id),
+                    "conversation_id": str(captured_conversation_id),
+                    "route": (done.route if done else None),
+                    "retrieval_path": (done.retrieval_path if done else None),
+                    "docs_count": len(done.retrieved_docs) if done else 0,
+                },
+            )
+            yield _sse_frame({
+                "type": "done",
+                "conversationId": str(captured_conversation_id),
+                "text": reply_with_links,
+            })
+
+        except asyncio.CancelledError:
+            # Client disconnected: best-effort persist so the turn isn't left
+            # dangling, then re-raise (never swallow CancelledError).
+            await _persist_on_failure(
+                SessionLocal, captured_conversation_id, answer_parts, enriched_citations
+            )
+            raise
+        except Exception:
+            logger.exception("chat-v2 stream failed (persisting fallback)")
+            await _persist_on_failure(
+                SessionLocal, captured_conversation_id, answer_parts, enriched_citations
+            )
+            yield _sse_frame({"type": "error", "message": _LLM_ERROR_FALLBACK})
+
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+async def _persist_on_failure(
+    session_maker,
+    conversation_id: UUID,
+    answer_parts: list[str],
+    citations: list[ChatCitation],
+) -> None:
+    """Persist a partial-or-fallback assistant message after a mid-stream error
+    or disconnect. Swallows its own errors so it can't mask the original."""
+    try:
+        async with session_maker() as write_db:
+            await _persist_assistant_message(
+                db=write_db,
+                conversation_id=conversation_id,
+                answer=("".join(answer_parts) or _LLM_ERROR_FALLBACK),
+                citations=citations,
+            )
+    except Exception:
+        logger.exception("chat-v2 stream: failure-path persist failed")

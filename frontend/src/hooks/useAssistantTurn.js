@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { startChatTurn } from "@/api/chatStream";
+import { normalizeCitationMarkers } from "@/components/chat/citations";
 
 /**
  * Owns the live assistant turn:
@@ -85,6 +86,23 @@ export function useAssistantTurn({ courseId, conversationId, onBeforeSend, onPer
             }),
           onDone: (info) => {
             doneInfoRef.current = info;
+            // Converge the (raw-streamed) live answer to the exact persisted,
+            // link-formatted text the server returns, so the live→persisted
+            // handoff dedup in CourseChat matches after normalization. Falls
+            // back to the already-accumulated answer when fullText is absent.
+            if (info?.fullText) {
+              setTurn((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      answer: normalizeCitationMarkers(
+                        info.fullText,
+                        info.citations ?? prev.citations
+                      ),
+                    }
+                  : prev
+              );
+            }
             cbRef.current.onPersisted?.(info);
             finalizeIfReady();
           },

@@ -1,10 +1,33 @@
 import React, { useEffect, useState } from "react";
 import { ChevronRight } from "lucide-react";
+import { useTypewriter } from "./useTypewriter";
 
-// Whimsical verbs are reserved for the long generic generation stage,
-// rotating in fixed order. Real retrieval stages show honest labels.
-const WHIMSY = ["Thinking", "Pondering", "Marinating", "Percolating"];
-const WHIMSY_SWAP_MS = 2000;
+// Rotating status copy, keyed by stage. Every line is honest about what's
+// actually happening (retrieval over lecture transcripts, then reasoning) —
+// just with a bit of personality. The label cycles while the stage is active.
+const SEARCHING_PHRASES = [
+  "Searching your course materials…",
+  "Checking the lectures…",
+  "Leafing through the transcripts…",
+  "Tracking down the relevant moments…",
+  "Cross-referencing your lectures…",
+  "Digging through the course…",
+];
+const THINKING_PHRASES = [
+  "Thinking…",
+  "Pondering…",
+  "Connecting the dots…",
+  "Piecing it together…",
+  "Mulling it over…",
+  "Reasoning it through…",
+  "Untangling the threads…",
+  "Percolating…",
+];
+const PHRASE_SWAP_MS = 2200;
+
+function _phrasesFor(stage) {
+  return stage === "generating" ? THINKING_PHRASES : SEARCHING_PHRASES;
+}
 
 /**
  * The thinking status line above an assistant reply.
@@ -23,31 +46,43 @@ export default function ThinkingDisclosure({
 }) {
   const active = phase === "retrieving" || phase === "thinking";
   const settled = (phase === "answering" || phase === "done") && thoughtForSecs != null;
-  const [whimsyIdx, setWhimsyIdx] = useState(0);
+  const [phraseIdx, setPhraseIdx] = useState(0);
   const [open, setOpen] = useState(false);
 
+  // Cycle the phrase pool for the current stage while active. Reset on stage
+  // change so searching↔thinking always starts from the pool's first line.
   useEffect(() => {
-    if (!(active && stage === "generating")) {
-      setWhimsyIdx(0);
+    if (!active) {
+      setPhraseIdx(0);
       return undefined;
     }
+    setPhraseIdx(0);
+    const pool = _phrasesFor(stage);
     const timer = setInterval(
-      () => setWhimsyIdx((i) => (i + 1) % WHIMSY.length),
-      WHIMSY_SWAP_MS
+      () => setPhraseIdx((i) => (i + 1) % pool.length),
+      PHRASE_SWAP_MS
     );
     return () => clearInterval(timer);
   }, [active, stage]);
 
   const hasThinking = !!(thinkingText && thinkingText.trim());
 
+  // Reveal the reasoning letter-by-letter while it streams (active); once
+  // settled/persisted, show it whole. A bit faster than the answer since the
+  // reasoning is denser and secondary. Has no citation markers, so the
+  // typewriter reveals plain characters.
+  const { visibleText: revealedThinking } = useTypewriter(thinkingText || "", {
+    enabled: active,
+    cps: 240,
+  });
+
   // Live turn (active/settled) always shows; a persisted message has neither
   // phase nor seconds, so it shows only when there's stored reasoning to expand.
   if (!active && !settled && !hasThinking) return null;
 
+  const pool = _phrasesFor(stage);
   const label = active
-    ? stage === "generating"
-      ? `${WHIMSY[whimsyIdx]}…`
-      : statusLabel || "Thinking…"
+    ? pool[phraseIdx % pool.length] || statusLabel || "Thinking…"
     : settled
       ? `Thought for ${thoughtForSecs}s`
       : "Thought process";
@@ -86,7 +121,7 @@ export default function ThinkingDisclosure({
         >
           <div className="overflow-hidden">
             <div className="mt-2.5 whitespace-pre-wrap border-l-2 border-purple-500/30 pl-3.5 text-[13px] leading-relaxed text-gray-400">
-              {thinkingText}
+              {revealedThinking}
             </div>
           </div>
         </div>

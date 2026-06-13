@@ -365,6 +365,238 @@ class TeachingAssistant(dspy.Module):
             debug=debug,
         )
 
+    async def astream(
+        self,
+        *,
+        db: AsyncSession,
+        course_info: CourseInfo,
+        conversation_history: ConversationHistory,
+        user_query: str,
+    ) -> AsyncIterator[Event]:
+        """Streaming sibling of `aforward`: walks the same cascade but yields
+        typed events as it goes, token-streaming **every** LLM call.
+
+        Mirrors `aforward`'s routing exactly (same views, same no-context
+        fallback). Every step runs through `dspy.streamify`: the router and
+        query-generator stream their `reasoning` as `ThinkingEvent`s (so the
+        thinking panel fills token-by-token), and all three answer-producing
+        branches (answer-from-context, no-context fallback, general answer,
+        clarify) stream their `answer`/`clarification` as `AnswerEvent`s.
+
+        The terminal `DoneEvent` carries the full answer + the metadata the
+        endpoint needs to post-process citations and persist. Errors propagate;
+        the streaming endpoint (M3) owns the try/except, fallback, persistence.
+        """
+        uq = (user_query or "").strip()
+        if not uq:
+            raise ValueError("user_query must be non-empty")
+
+        ci_basic = course_info.to_basic_info()
+        ch_str = conversation_history.to_prompt_string()
+        debug: dict[str, Any] = {}
+        # Reasoning is streamed from up to three sources (router → query-gen →
+        # answer). Insert a blank-line separator between blocks so the last
+        # sentence of one doesn't run into the first of the next.
+        thinking_seen = False
+
+        # --- Router (stream its reasoning as thinking) ---
+        route_pred = None
+        async for field, payload in self._astream_predict(
+            self.router,
+            listen_fields=["reasoning"],
+            course_info=ci_basic,
+            conversation_history=ch_str,
+            user_query=uq,
+        ):
+            if field is None:
+                route_pred = payload
+            elif field == "reasoning":
+                yield ThinkingEvent(delta=payload)
+                thinking_seen = True
+        route = _normalize_route(getattr(route_pred, "route", ""))
+        _stash_reasoning(debug, "router_reasoning", route_pred)
+
+        # --- clarify / general-answer routes: stream the reply, no retrieval ---
+        if route in ("clarify", "answer"):
+            predictor = self.clarifier if route == "clarify" else self.answer_without_context
+            answer_field = "clarification" if route == "clarify" else "answer"
+            out: dict[str, str] = {}
+            async for ev in self._emit_answer(
+                predictor,
+                answer_field=answer_field,
+                out=out,
+                thinking_separator="\n\n" if thinking_seen else "",
+                course_info=ci_basic,
+                conversation_history=ch_str,
+                user_query=uq,
+            ):
+                yield ev
+            yield DoneEvent(answer=out.get("answer", ""), route=route, debug=debug)
+            return
+
+        # --- retrieve route ---
+        yield StatusEvent(stage="searching", label="Searching course materials…")
+        params = None
+        qg_first = True
+        async for field, payload in self._astream_predict(
+            self.query_generator,
+            listen_fields=["reasoning"],
+            course_info=course_info.to_detailed_info(),
+            conversation_history=ch_str,
+            user_query=uq,
+        ):
+            if field is None:
+                params = payload
+            elif field == "reasoning":
+                if qg_first and thinking_seen:
+                    yield ThinkingEvent(delta="\n\n")
+                qg_first = False
+                yield ThinkingEvent(delta=payload)
+                thinking_seen = True
+        _stash_reasoning(debug, "query_gen_reasoning", params)
+
+        decision = await self._retriever.retrieve(
+            db=db,
+            course_info=course_info,
+            contextualized_query=(str(params.contextualized_query or "").strip() or uq),
+            lecture_routing=list(params.lecture_routing or []),
+            target_lecture_slug=params.target_lecture_slug,
+            target_timestamp=params.target_timestamp,
+        )
+
+        if not decision.docs:
+            # Terminal "no context" branch: prime an honest answer, still streamed.
+            primed_query = (
+                f"{uq}\n\n"
+                "(System note: a retrieval lookup for specific details in the "
+                "lecture transcripts returned nothing relevant. Answer carefully "
+                "and tell the student what information you don't have access to.)"
+            )
+            out = {}
+            async for ev in self._emit_answer(
+                self.answer_without_context,
+                answer_field="answer",
+                out=out,
+                thinking_separator="\n\n" if thinking_seen else "",
+                course_info=ci_basic,
+                conversation_history=ch_str,
+                user_query=primed_query,
+            ):
+                yield ev
+            yield DoneEvent(
+                answer=out.get("answer", ""),
+                route="retrieve",
+                retrieval_path="none",
+                retrieved_docs=[],
+                debug=debug,
+            )
+            return
+
+        # Sources first, so the client can render them while the answer streams.
+        yield CitationsEvent(docs=list(decision.docs))
+        yield StatusEvent(stage="generating", label=None)
+
+        rendered_docs = [
+            d.to_prompt_string(index=i) for i, d in enumerate(decision.docs, start=1)
+        ]
+        out = {}
+        async for ev in self._emit_answer(
+            self.answer_from_context,
+            answer_field="answer",
+            out=out,
+            thinking_separator="\n\n" if thinking_seen else "",
+            course_info=course_info.to_header(),
+            conversation_history=ch_str,
+            user_query=uq,
+            retrieved_docs=rendered_docs,
+        ):
+            yield ev
+        yield DoneEvent(
+            answer=out.get("answer", ""),
+            route="retrieve",
+            retrieval_path=decision.path,
+            retrieved_docs=list(decision.docs),
+            debug=debug,
+        )
+
+    async def _astream_predict(
+        self,
+        predictor: dspy.Module,
+        *,
+        listen_fields: list[str],
+        **inputs: Any,
+    ) -> AsyncIterator[tuple[str | None, Any]]:
+        """Run a predictor via `dspy.streamify`, yielding `(field_name, delta)`
+        for each streamed chunk of a listened output field, then `(None, prediction)`
+        once with the final `dspy.Prediction`.
+
+        Wrapper + listeners are built per call: the module is a process singleton
+        and `StreamListener` carries per-run state, so reusing instances across
+        turns would bleed state. Runs on the event loop (litellm async streaming),
+        not via `to_thread`.
+        """
+        listeners = [
+            dspy.streaming.StreamListener(signature_field_name=f) for f in listen_fields
+        ]
+        streamed = dspy.streamify(
+            predictor, stream_listeners=listeners, async_streaming=True
+        )
+        final: Any = None
+        with dspy.settings.context(lm=self._get_lm()):
+            async for chunk in streamed(**inputs):
+                if isinstance(chunk, dspy.streaming.StreamResponse):
+                    yield (chunk.signature_field_name, str(chunk.chunk or ""))
+                elif isinstance(chunk, dspy.Prediction):
+                    final = chunk
+        yield (None, final)
+
+    async def _emit_answer(
+        self,
+        predictor: dspy.Module,
+        *,
+        answer_field: str,
+        out: dict[str, str],
+        thinking_separator: str = "",
+        **inputs: Any,
+    ) -> AsyncIterator[Event]:
+        """Stream one answer-producing predictor: emit `ThinkingEvent`s for its
+        `reasoning` (when present) and `AnswerEvent`s for its answer field
+        (`answer` or `clarification`). Writes the full answer text to `out["answer"]`.
+
+        `thinking_separator`, when set, is emitted once before this predictor's
+        first reasoning chunk — used by `astream` to put a blank line between this
+        block and the preceding router/query-gen reasoning. Only emitted if the
+        predictor actually streams reasoning (so it never leaves a trailing gap).
+
+        Falls back to one whole-answer `AnswerEvent` when the provider returned no
+        incremental answer chunks (granularity is nondeterministic) — so the client
+        always receives the answer, streamed or not.
+        """
+        listen = [answer_field] if answer_field == "clarification" else ["reasoning", answer_field]
+        parts: list[str] = []
+        final: Any = None
+        answer_streamed = False
+        reasoning_seen = False
+        async for field, payload in self._astream_predict(
+            predictor, listen_fields=listen, **inputs
+        ):
+            if field is None:
+                final = payload
+            elif field == "reasoning":
+                if not reasoning_seen and thinking_separator:
+                    yield ThinkingEvent(delta=thinking_separator)
+                reasoning_seen = True
+                yield ThinkingEvent(delta=payload)
+            elif field == answer_field:
+                parts.append(payload)
+                answer_streamed = True
+                yield AnswerEvent(delta=payload)
+
+        text = (str(getattr(final, answer_field, "") or "") or "".join(parts)).strip()
+        if not answer_streamed and text:
+            yield AnswerEvent(delta=text)
+        out["answer"] = text
+
     # --- Thin sync wrappers so `aforward` can dispatch them via `asyncio.to_thread`. ---
 
     # Each helper binds the LM via `dspy.settings.context(lm=...)` so the
