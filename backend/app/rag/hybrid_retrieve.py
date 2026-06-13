@@ -206,6 +206,7 @@ async def _semantic_top_k(
     query: str,
     top_k: int,
     categories: Sequence[str] | None,
+    video_asset_ids: Sequence[UUID] | None = None,
 ) -> list[RagHit]:
     settings: Settings = get_settings()
 
@@ -255,6 +256,7 @@ async def _semantic_top_k(
         return []
 
     cats = [str(c).strip() for c in (categories or []) if str(c).strip()]
+    asset_ids = [str(a) for a in (video_asset_ids or [])]
 
     sql = """
     SELECT
@@ -277,11 +279,17 @@ async def _semantic_top_k(
     """
     if cats:
         sql += " AND category = ANY(:cats)\n"
+    # Scope to specific lectures BEFORE the ORDER BY / LIMIT so the nearest-k is
+    # computed within the requested lectures, not post-filtered out of a global k.
+    if asset_ids:
+        sql += " AND video_asset_id = ANY(CAST(:asset_ids AS uuid[]))\n"
     sql += " ORDER BY (embedding <=> :qvec::vector) ASC, created_at DESC LIMIT :k"
 
     params: dict[str, Any] = {"course_id": str(course_id), "qvec": qlit, "k": k}
     if cats:
         params["cats"] = cats
+    if asset_ids:
+        params["asset_ids"] = asset_ids
 
     res = await db.execute(sa_text(sql), params)
     rows = res.mappings().all()
@@ -317,6 +325,7 @@ async def retrieve_course_hybrid_hits(
     query: str,
     cfg: HybridRetrieveConfig | None = None,
     categories: Iterable[str] | None = None,
+    video_asset_ids: Sequence[UUID] | None = None,
 ) -> list[RagHit]:
     """
     Hybrid retrieval over Postgres retrieval corpus (`content_chunks`):
@@ -326,6 +335,11 @@ async def retrieve_course_hybrid_hits(
 
     Safe defaults:
     - If embeddings are not configured / query embed fails, returns lexical-only.
+
+    When `video_asset_ids` is provided, BOTH the lexical and semantic legs filter
+    to those lectures in SQL — so each leg's top-k is computed within the scoped
+    set rather than post-filtered out of a global ranking (the latter can starve
+    a correctly-routed lecture whose best chunks rank below other lectures').
     """
     cfg = cfg or HybridRetrieveConfig()
     q = (query or "").strip()
@@ -333,15 +347,18 @@ async def retrieve_course_hybrid_hits(
         return []
 
     cats = [str(c).strip() for c in (categories or []) if str(c).strip()] if categories else None
+    asset_ids = list(video_asset_ids) if video_asset_ids else None
 
     lexical = await retrieve_course_chunk_hits(
-        db=db, course_id=course_id, query=q, top_k=int(cfg.lexical_k), categories=cats
+        db=db, course_id=course_id, query=q, top_k=int(cfg.lexical_k),
+        categories=cats, video_asset_ids=asset_ids,
     )
 
     # Best-effort semantic retrieval.
     try:
         semantic = await _semantic_top_k(
-            db=db, course_id=course_id, query=q, top_k=int(cfg.semantic_k), categories=cats
+            db=db, course_id=course_id, query=q, top_k=int(cfg.semantic_k),
+            categories=cats, video_asset_ids=asset_ids,
         )
     except Exception as e:
         _log_semantic_once(

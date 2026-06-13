@@ -40,6 +40,10 @@ export function startChatTurn({ courseId, message, conversationId }, handlers = 
       const citations = Array.isArray(res?.citations) ? res.citations : [];
       const normalized = normalizeCitationMarkers(String(res?.text ?? ""), citations);
       safe(handlers.onCitations, citations);
+      // Non-streamed: the backend computes the reasoning in one shot, so we
+      // deliver it as a single delta just before the answer reveals. A real SSE
+      // adapter would emit these progressively as the cascade runs.
+      if (res?.thinking) safe(handlers.onThinkingDelta, String(res.thinking));
       safe(handlers.onAnswerDelta, normalized);
       safe(handlers.onDone, {
         conversationId: res?.conversationId || res?.conversation_id || null,

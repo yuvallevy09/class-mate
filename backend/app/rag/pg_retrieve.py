@@ -17,12 +17,17 @@ async def retrieve_course_chunk_hits(
     query: str,
     top_k: int = 8,
     categories: Sequence[str] | None = None,
+    video_asset_ids: Sequence[UUID] | None = None,
 ) -> list[RagHit]:
     """
     Postgres BM25 retrieval over `content_chunks` using `pg_textsearch`.
 
     - Scopes to a single course_id (your chats are course-scoped)
     - Optionally filters to router-selected category(ies)
+    - Optionally scopes to specific lectures via `video_asset_ids`. This filters
+      BEFORE the BM25 `LIMIT`, so `top_k` is computed *within* the requested
+      lectures rather than carved out of a global ranking that other lectures
+      might dominate.
     - Ranks via BM25
     """
     q = (query or "").strip()
@@ -45,6 +50,11 @@ async def retrieve_course_chunk_hits(
         cats = [str(c).strip() for c in categories if str(c).strip()]
         if cats:
             stmt = stmt.where(ContentChunk.category.in_(cats))
+
+    if video_asset_ids:
+        asset_ids = list(video_asset_ids)
+        if asset_ids:
+            stmt = stmt.where(ContentChunk.video_asset_id.in_(asset_ids))
 
     stmt = stmt.order_by(rank.desc(), ContentChunk.created_at.desc()).limit(k)
 

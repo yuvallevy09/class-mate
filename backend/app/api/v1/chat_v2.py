@@ -74,6 +74,52 @@ _LLM_ERROR_FALLBACK = (
 )
 
 
+def _build_thinking(
+    *,
+    route: str | None,
+    retrieval_path: str | None,
+    retrieved_docs: list[RetrievedDoc],
+    debug: dict,
+) -> str | None:
+    """Compose a plain-text "thinking" explanation for the live turn.
+
+    Built entirely from data the cascade already produced:
+    - `debug` carries the `ChainOfThought` reasoning strings (`router_reasoning`,
+      `query_gen_reasoning`) that `TeachingAssistant` stashes.
+    - On the retrieve path we prepend a one-line summary of where we looked and
+      how much we found, derived from `retrieval_path` + the retrieved doc slugs.
+
+    Returns `None` when there's nothing substantive — the UI then hides the
+    reasoning panel (and still shows the "Thought for Ns" line). Reasoning text
+    is the model's raw rationale; surfaced as-is for now.
+    """
+    router_reasoning = str(debug.get("router_reasoning") or "").strip()
+    query_gen_reasoning = str(debug.get("query_gen_reasoning") or "").strip()
+
+    parts: list[str] = []
+    if route == "retrieve":
+        # Distinct lecture slugs in first-seen order, for a readable summary.
+        slugs: list[str] = []
+        for d in retrieved_docs:
+            if d.lecture_slug and d.lecture_slug not in slugs:
+                slugs.append(d.lecture_slug)
+        if retrieval_path == "none" or not retrieved_docs:
+            parts.append("Looked through the course materials but found nothing relevant.")
+        elif slugs:
+            where = ", ".join(slugs)
+            n = len(retrieved_docs)
+            passages = "passage" if n == 1 else "passages"
+            parts.append(f"Searched lectures {where} — found {n} relevant {passages}.")
+        if query_gen_reasoning:
+            parts.append(query_gen_reasoning)
+    elif router_reasoning:
+        # answer / clarify: the router's rationale is the only thinking we have.
+        parts.append(router_reasoning)
+
+    text = "\n\n".join(p for p in parts if p).strip()
+    return text or None
+
+
 def _docs_to_citations(docs: list[RetrievedDoc]) -> list[ChatCitation]:
     """Map retrieved docs into the `ChatCitation` shape the frontend already renders.
 
@@ -255,6 +301,7 @@ async def course_chat_v2(
     route: str | None = None
     retrieval_path: str | None = None
     retrieved_docs: list[RetrievedDoc] = []
+    debug: dict = {}
     latency_ms: int = 0
     error: str | None = None
 
@@ -273,6 +320,7 @@ async def course_chat_v2(
         route = result.route
         retrieval_path = result.retrieval_path
         retrieved_docs = list(result.retrieved_docs)
+        debug = dict(result.debug or {})
     except Exception as e:
         # Any failure inside the cascade — LM parse errors, DB hiccups, etc. —
         # gets persisted as a visible assistant message so the conversation
@@ -299,6 +347,14 @@ async def course_chat_v2(
     normalized_answer = _normalize_slug_citations(answer_text, citations)
     reply_with_links = _format_reply_with_citation_links(normalized_answer, citations)
 
+    # Computed once: persisted with the message AND returned for the live turn.
+    thinking = _build_thinking(
+        route=route,
+        retrieval_path=retrieval_path,
+        retrieved_docs=retrieved_docs,
+        debug=debug,
+    )
+
     # --- Persist assistant message + bump conversation activity ---
     db.add(
         ChatMessage(
@@ -306,6 +362,7 @@ async def course_chat_v2(
             role="assistant",
             content=reply_with_links,
             citations=[c.model_dump(mode="json") for c in citations] if citations else None,
+            thinking=thinking,
         )
     )
     conversation.last_message_at = datetime.now(timezone.utc)
@@ -332,4 +389,5 @@ async def course_chat_v2(
         text=reply_with_links,
         citations=citations,
         conversation_id=conversation.id,
+        thinking=thinking,
     )

@@ -37,3 +37,8 @@ class CourseChatResponse(BaseModel):
     text: str
     citations: list[ChatCitation] = Field(default_factory=list)
     conversation_id: UUID | None = Field(default=None, serialization_alias="conversationId")
+    # Plain-text "thinking" explanation for the live turn (why the assistant
+    # routed/searched the way it did). Per-turn only — not persisted with the
+    # message, so it doesn't survive a history reload. Null when there's nothing
+    # substantive to show; the UI hides the reasoning panel in that case.
+    thinking: str | None = None

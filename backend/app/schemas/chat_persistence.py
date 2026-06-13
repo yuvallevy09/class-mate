@@ -26,6 +26,7 @@ class ChatMessagePublic(BaseModel):
     role: str
     content: str
     citations: list[ChatCitation] | None = None
+    thinking: str | None = None
     created_at: datetime
 
 

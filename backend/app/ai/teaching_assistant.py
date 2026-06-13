@@ -21,6 +21,7 @@ Design notes:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from functools import lru_cache
 from typing import Any, Literal
 
@@ -29,6 +30,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.llm import build_lm
+from app.ai.stream_events import (
+    AnswerEvent,
+    CitationsEvent,
+    DoneEvent,
+    Event,
+    StatusEvent,
+    ThinkingEvent,
+)
 from app.core.settings import Settings, get_settings
 from app.rag.course_retriever import CourseRetriever, RetrievalPath
 from app.rag.explicit_retrieve import (

@@ -31,6 +31,11 @@ class ChatMessage(Base):
     # Stored as JSONB to keep chat history stable without embedding citations into markdown.
     citations: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
 
+    # Optional plain-text "thinking" explanation for assistant messages (why the
+    # assistant routed/searched the way it did). Persisted so it survives a
+    # history reload; null for user messages and turns with nothing to show.
+    thinking: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

@@ -113,22 +113,25 @@ async def _perform_hybrid_search(
 ) -> list[RetrievedDoc]:
     """Run BM25+pgvector+RRF over the course and adapt to `RetrievedDoc`.
 
-    When `lecture_slugs` is non-empty, post-filters hits by `video_asset_id`.
-    When empty/None, returns the unfiltered hybrid view (course-wide).
-    If `lecture_slugs` is non-empty but none resolve to a ready lecture, returns
-    `[]` — we'd rather surface "no context" than silently widen to the whole
-    course after the model explicitly scoped its request.
+    When `lecture_slugs` is non-empty, scopes the hybrid search to those lectures
+    IN SQL (both legs filter by `video_asset_id` before their top-k cut), so the
+    requested lectures aren't starved by a global ranking. When empty/None,
+    returns the unfiltered hybrid view (course-wide). If `lecture_slugs` is
+    non-empty but none resolve to a ready lecture, returns `[]` — we'd rather
+    surface "no context" than silently widen after the model explicitly scoped
+    its request (the caller's course-wide fallback handles widening).
     """
     q = (query or "").strip()
     if not q:
         return []
 
-    lecture_filter: set[UUID] | None = None
+    asset_ids: list[UUID] | None = None
     if lecture_slugs:
         lectures = course_info.lectures_by_slugs(lecture_slugs)
-        lecture_filter = {lec.id for lec in lectures if lec.transcript_ready}
-        if not lecture_filter:
+        ready = [lec.id for lec in lectures if lec.transcript_ready]
+        if not ready:
             return []
+        asset_ids = ready
 
     hits = await retrieve_course_hybrid_hits(
         db=db,
@@ -136,11 +139,13 @@ async def _perform_hybrid_search(
         query=q,
         cfg=cfg or HybridRetrieveConfig(),
         categories=None,
+        video_asset_ids=asset_ids,
     )
+    # Hits are already lecture-scoped in SQL (when requested), so no post-filter.
     return _hits_to_docs(
         hits=list(hits),
         course_info=course_info,
-        lecture_filter=lecture_filter,
+        lecture_filter=None,
     )
 
 

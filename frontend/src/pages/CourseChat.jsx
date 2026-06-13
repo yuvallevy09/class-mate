@@ -279,6 +279,9 @@ export default function CourseChat() {
                       <UserMessage content={msg.content} />
                     ) : (
                       <div className="w-full">
+                        {msg.thinking ? (
+                          <ThinkingDisclosure thinkingText={msg.thinking} />
+                        ) : null}
                         <AssistantMessage
                           content={msg.content}
                           citations={msg.citations}

@@ -9,8 +9,10 @@ const WHIMSY_SWAP_MS = 2000;
 /**
  * The thinking status line above an assistant reply.
  * Active: shimmer label (real stage label, or whimsy rotation while generating).
- * Settled: "Thought for Ns". The expandable reasoning panel renders only when
- * thinkingText exists — never with the stub adapter (no fabricated reasoning).
+ * Settled (live turn): "Thought for Ns".
+ * Persisted (history reload): no phase/seconds, just stored reasoning — renders a
+ * static, expandable "Thought process" panel.
+ * The expandable reasoning panel renders only when thinkingText exists.
  */
 export default function ThinkingDisclosure({
   phase,
@@ -36,15 +38,19 @@ export default function ThinkingDisclosure({
     return () => clearInterval(timer);
   }, [active, stage]);
 
-  if (!active && !settled) return null;
+  const hasThinking = !!(thinkingText && thinkingText.trim());
+
+  // Live turn (active/settled) always shows; a persisted message has neither
+  // phase nor seconds, so it shows only when there's stored reasoning to expand.
+  if (!active && !settled && !hasThinking) return null;
 
   const label = active
     ? stage === "generating"
       ? `${WHIMSY[whimsyIdx]}…`
       : statusLabel || "Thinking…"
-    : `Thought for ${thoughtForSecs}s`;
-
-  const hasThinking = !!(thinkingText && thinkingText.trim());
+    : settled
+      ? `Thought for ${thoughtForSecs}s`
+      : "Thought process";
 
   const labelSpan = (
     <span key={label} className={active ? "cm-shimmer cm-word-in" : ""}>
