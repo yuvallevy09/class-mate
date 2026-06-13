@@ -144,5 +144,23 @@ export function buildMarkdownComponents({
     },
     h3: ({ children }) => <h3 className="mt-3 mb-2 text-sm font-semibold">{children}</h3>,
     hr: () => <hr className="my-4 border-white/10" />,
+    table: ({ children }) => (
+      <div className="my-3 overflow-x-auto rounded-lg border border-white/15">
+        <table className="w-full border-collapse text-left text-sm">{children}</table>
+      </div>
+    ),
+    thead: ({ children }) => <thead className="bg-white/[0.06]">{children}</thead>,
+    tbody: ({ children }) => <tbody>{children}</tbody>,
+    tr: ({ children }) => (
+      <tr className="border-b border-white/10 last:border-0">{children}</tr>
+    ),
+    th: ({ children }) => (
+      <th className="px-3 py-2 font-semibold text-gray-100">{children}</th>
+    ),
+    td: ({ children }) => (
+      <td className="border-l border-white/10 px-3 py-2 align-top first:border-l-0 text-gray-200/90">
+        {children}
+      </td>
+    ),
   };
 }
