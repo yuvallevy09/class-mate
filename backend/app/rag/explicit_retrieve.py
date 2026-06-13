@@ -7,7 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.transcript_segment import TranscriptSegment
-from app.schemas.course_info import CourseInfo, Lecture, LectureChapter
+from app.db.models.video_chapter import VideoChapter
+from app.schemas.course_info import CourseInfo, Lecture
 from app.schemas.retrieval import RetrievedDoc
 
 
@@ -73,23 +74,35 @@ def _normalize_slug(token: str | None) -> str | None:
     return t.upper() if _SLUG_RE.match(t) else None
 
 
-def _find_chapter_at(chapters: list[LectureChapter], ts: float) -> LectureChapter | None:
-    """Return the chapter whose [start_sec, end_sec) contains `ts`.
+async def _find_chapter_at(
+    *,
+    db: AsyncSession,
+    video_asset_id: UUID,
+    ts: float,
+) -> VideoChapter | None:
+    """Return the chapter whose [start_sec, end_sec) contains `ts`, or None.
+
+    Queried on demand for a single lecture (this path is rare) rather than
+    preloaded into `CourseInfo` on every chat turn.
 
     Half-open on the end so adjacent chapters (A ends at 600.0, B starts at
-    600.0) attribute `ts=600.0` to B, matching the natural reading of "this
-    is where the next chapter begins". Matches `_load_segments_in_range`,
-    which is also half-open.
-
-    When chapters overlap (shouldn't happen, but doesn't hurt to be defensive),
+    600.0) attribute `ts=600.0` to B, matching the natural reading of "this is
+    where the next chapter begins". Matches `_load_segments_in_range`, which is
+    also half-open. When chapters overlap (shouldn't happen, but be defensive),
     prefer the lowest `chapter_index` so behavior is deterministic.
     """
-    best: LectureChapter | None = None
-    for ch in chapters:
-        if ch.start_sec <= ts < ch.end_sec:
-            if best is None or ch.chapter_index < best.chapter_index:
-                best = ch
-    return best
+    stmt = (
+        select(VideoChapter)
+        .where(
+            VideoChapter.video_asset_id == video_asset_id,
+            VideoChapter.start_sec <= ts,
+            VideoChapter.end_sec > ts,
+        )
+        .order_by(VideoChapter.chapter_index.asc())
+        .limit(1)
+    )
+    res = await db.execute(stmt)
+    return res.scalars().first()
 
 
 async def _load_segments_in_range(
@@ -167,7 +180,7 @@ async def retrieve_explicitly(
     if lecture is None or not lecture.transcript_ready:
         return []
 
-    chapter = _find_chapter_at(lecture.chapters, ts_sec)
+    chapter = await _find_chapter_at(db=db, video_asset_id=lecture.id, ts=ts_sec)
     if chapter is not None:
         window_start = float(chapter.start_sec)
         window_end = float(chapter.end_sec)

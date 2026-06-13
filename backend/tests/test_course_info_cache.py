@@ -57,53 +57,29 @@ async def test_cached_call_returns_same_value_without_re_running_builder() -> No
 
 
 @pytest.mark.asyncio
-async def test_include_chapters_variants_are_cached_separately() -> None:
-    course_id = uuid4()
-    course = _StubCourse(course_id)
-    info_with = _make_info(course_id)
-    info_without = _make_info(course_id)
-
-    async def fake_build(*, db, course, include_chapters=True):  # noqa: ARG001
-        return info_with if include_chapters else info_without
-
-    with patch.object(course_info_module, "build_course_info", side_effect=fake_build):
-        a1 = await build_course_info_cached(db=None, course=course, include_chapters=True)
-        a2 = await build_course_info_cached(db=None, course=course, include_chapters=True)
-        b1 = await build_course_info_cached(db=None, course=course, include_chapters=False)
-        b2 = await build_course_info_cached(db=None, course=course, include_chapters=False)
-
-    assert a1 is info_with and a2 is info_with
-    assert b1 is info_without and b2 is info_without
-    # Distinct cache slots: two builder calls total (one per variant).
-
-
-@pytest.mark.asyncio
-async def test_invalidate_course_info_cache_drops_both_variants() -> None:
+async def test_invalidate_course_info_cache_drops_entry() -> None:
     course_id = uuid4()
     course = _StubCourse(course_id)
 
     call_count = {"n": 0}
 
-    async def counting_build(*, db, course, include_chapters=True):  # noqa: ARG001
+    async def counting_build(*, db, course):  # noqa: ARG001
         call_count["n"] += 1
         return _make_info(course_id)
 
     with patch.object(course_info_module, "build_course_info", side_effect=counting_build):
-        await build_course_info_cached(db=None, course=course, include_chapters=True)
-        await build_course_info_cached(db=None, course=course, include_chapters=False)
-        assert call_count["n"] == 2
+        await build_course_info_cached(db=None, course=course)
+        assert call_count["n"] == 1
 
         # Cached: no new builds.
-        await build_course_info_cached(db=None, course=course, include_chapters=True)
-        await build_course_info_cached(db=None, course=course, include_chapters=False)
-        assert call_count["n"] == 2
+        await build_course_info_cached(db=None, course=course)
+        assert call_count["n"] == 1
 
         invalidate_course_info_cache(course_id)
 
-        # Both variants should rebuild.
-        await build_course_info_cached(db=None, course=course, include_chapters=True)
-        await build_course_info_cached(db=None, course=course, include_chapters=False)
-        assert call_count["n"] == 4
+        # Dropped: rebuilds on next call.
+        await build_course_info_cached(db=None, course=course)
+        assert call_count["n"] == 2
 
 
 @pytest.mark.asyncio

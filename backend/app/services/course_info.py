@@ -10,17 +10,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models.course import Course
 from app.db.models.course_content import CourseContent
 from app.db.models.video_asset import VideoAsset
-from app.db.models.video_chapter import VideoChapter
-from app.schemas.course_info import CourseInfo, Lecture, LectureChapter
+from app.schemas.course_info import CourseInfo, Lecture
 
 
 # --- TTL cache ---
 #
 # `build_course_info` is hit on every chat turn (once `TeachingAssistant` is
 # wired into the endpoint). The output only changes when lectures/contents/
-# chapters/AI titles/summaries change — i.e. on uploads, transcript ingestion,
-# and explicit edits. Within a typical chat session (a few minutes) the catalog
-# is effectively immutable.
+# AI titles/descriptions/summaries change — i.e. on uploads, transcript
+# ingestion, and explicit edits. Within a typical chat session (a few minutes)
+# the catalog is effectively immutable.
 #
 # A 5-minute TTL gives us:
 #   - high hit rate within a chat session,
@@ -43,25 +42,23 @@ _COURSE_INFO_CACHE: TTLCache = TTLCache(
 )
 
 
-def _cache_key(course_id: UUID, *, include_chapters: bool) -> tuple:
-    """Stable cache key. `include_chapters` is part of the key because it
-    materially changes the returned object (no chapters vs full chapters)."""
-    return hashkey(str(course_id), bool(include_chapters))
+def _cache_key(course_id: UUID) -> tuple:
+    """Stable cache key, one entry per course."""
+    return hashkey(str(course_id))
 
 
 def invalidate_course_info_cache(course_id: UUID | str) -> None:
-    """Drop both cached variants (`include_chapters` True/False) for a course.
+    """Drop the cached `CourseInfo` for a course.
 
     Call this from any code path that mutates data feeding into `CourseInfo`:
     creating/deleting `CourseContent` or `VideoAsset`, ingesting transcripts
-    (flipping `transcript_ready`), creating `VideoChapter` rows, updating
-    `ai_title` / `ai_summary`, renaming the course, etc.
+    (flipping `transcript_ready`), updating `ai_title` / `ai_description` /
+    `ai_summary`, renaming the course, etc.
 
     Safe to call with a UUID or its string form. No-op when the key is absent.
     """
     cid = course_id if isinstance(course_id, UUID) else UUID(str(course_id))
-    for include_chapters in (True, False):
-        _COURSE_INFO_CACHE.pop(_cache_key(cid, include_chapters=include_chapters), None)
+    _COURSE_INFO_CACHE.pop(_cache_key(cid), None)
 
 
 def clear_course_info_cache() -> None:
@@ -73,7 +70,6 @@ async def build_course_info_cached(
     *,
     db: AsyncSession,
     course: Course,
-    include_chapters: bool = True,
 ) -> CourseInfo:
     """Cached variant of `build_course_info` with a TTL.
 
@@ -84,13 +80,11 @@ async def build_course_info_cached(
     When in doubt about freshness, call `invalidate_course_info_cache(course.id)`
     after mutating any of the underlying tables.
     """
-    key = _cache_key(course.id, include_chapters=include_chapters)
+    key = _cache_key(course.id)
     cached = _COURSE_INFO_CACHE.get(key)
     if cached is not None:
         return cached
-    info = await build_course_info(
-        db=db, course=course, include_chapters=include_chapters
-    )
+    info = await build_course_info(db=db, course=course)
     _COURSE_INFO_CACHE[key] = info
     return info
 
@@ -123,48 +117,25 @@ def _clean_optional(value: str | None) -> str | None:
     return s or None
 
 
-async def _load_chapters_by_asset(
-    *,
-    db: AsyncSession,
-    asset_ids: list[UUID],
-) -> dict[UUID, list[LectureChapter]]:
-    """Batch-load chapters for many video assets and group by `video_asset_id`."""
-    if not asset_ids:
-        return {}
-
-    res = await db.execute(
-        select(VideoChapter)
-        .where(VideoChapter.video_asset_id.in_(asset_ids))
-        .order_by(
-            VideoChapter.video_asset_id.asc(),
-            VideoChapter.chapter_index.asc(),
-        )
-    )
-    by_asset: dict[UUID, list[LectureChapter]] = {}
-    for row in res.scalars().all():
-        by_asset.setdefault(row.video_asset_id, []).append(
-            LectureChapter.model_validate(row)
-        )
-    return by_asset
-
-
 async def build_course_info(
     *,
     db: AsyncSession,
     course: Course,
-    include_chapters: bool = True,
 ) -> CourseInfo:
     """Build a `CourseInfo` snapshot for a course.
 
     - Loads all `VideoAsset` rows for the course joined with their `CourseContent` rows.
     - Orders lectures chronologically (oldest first) so the per-turn `L1`, `L2`, ...
       slugs are stable across turns of the same conversation.
-    - When `include_chapters=True`, fetches all `VideoChapter` rows in one batched
-      query and derives `duration_sec` from the last chapter's `end_sec`.
     - Best-effort: missing data degrades to `None` rather than raising.
 
-    Note: this loader does not currently filter to a token budget. Truncation for
-    LLM input is the responsibility of `CourseInfo.to_prompt_string(max_chars=...)`.
+    Chapters are intentionally NOT loaded here: they're only needed on the rare
+    explicit-retrieval path (a single lecture), which queries them on demand
+    (`app.rag.explicit_retrieve`). Keeping them off this per-turn hot path avoids
+    a chapter query on every chat turn.
+
+    Note: this loader does not filter to a token budget. Bounding LLM input is the
+    responsibility of the `CourseInfo.to_*` prompt views.
     """
     res = await db.execute(
         select(VideoAsset, CourseContent)
@@ -177,19 +148,8 @@ async def build_course_info(
     )
     rows: list[tuple[VideoAsset, CourseContent]] = list(res.all())
 
-    asset_ids: list[UUID] = [asset.id for (asset, _content) in rows]
-
-    chapters_by_asset: dict[UUID, list[LectureChapter]] = {}
-    if include_chapters and asset_ids:
-        chapters_by_asset = await _load_chapters_by_asset(db=db, asset_ids=asset_ids)
-
     lectures: list[Lecture] = []
     for idx, (asset, content) in enumerate(rows, start=1):
-        chapters = chapters_by_asset.get(asset.id, [])
-        duration_sec: float | None = (
-            max((c.end_sec for c in chapters)) if chapters else None
-        )
-
         lectures.append(
             Lecture(
                 id=asset.id,
@@ -199,10 +159,9 @@ async def build_course_info(
                 description=_clean_optional(
                     content.description if content is not None else None
                 ),
+                ai_description=_clean_optional(asset.ai_description),
                 summary=_clean_optional(asset.ai_summary),
-                duration_sec=duration_sec,
                 transcript_ready=asset.transcript_ingested_at is not None,
-                chapters=chapters,
             )
         )
 

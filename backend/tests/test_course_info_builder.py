@@ -88,6 +88,7 @@ async def test_build_course_info_returns_lectures_in_chronological_order() -> No
                 original_filename="lecture-a.mp4",
                 mime_type="video/mp4",
                 ai_title="Intro to Networking",
+                ai_description="A one-line blurb for lecture A.",
                 ai_summary="An AI-generated summary of lecture A.",
                 transcript_ingested_at=datetime.now(timezone.utc),
             )
@@ -165,94 +166,18 @@ async def test_build_course_info_returns_lectures_in_chronological_order() -> No
             assert lec1.content_id == content_a.id
             assert lec1.title == "Intro to Networking"  # ai_title wins
             assert lec1.description == "Instructor description."  # stripped
+            assert lec1.ai_description == "A one-line blurb for lecture A."
             assert lec1.summary == "An AI-generated summary of lecture A."
             assert lec1.transcript_ready is True
-            assert lec1.duration_sec == 1320.0  # from last chapter end
-            assert [c.chapter_index for c in lec1.chapters] == [0, 1]
-            assert [c.title for c in lec1.chapters] == ["Welcome", "OSI Model"]
 
             assert lec2.slug == "L2"
             assert lec2.id == asset_b.id
             assert lec2.content_id == content_b.id
             assert lec2.title == "Lecture B Library Title"  # content.title fallback
             assert lec2.description is None
+            assert lec2.ai_description is None
             assert lec2.summary is None
             assert lec2.transcript_ready is False
-            assert lec2.duration_sec is None
-            assert lec2.chapters == []
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_build_course_info_without_chapters_skips_chapter_query() -> None:
-    settings = get_settings()
-    if not await _can_connect(settings.database_url):
-        pytest.skip("Database not reachable. Start Postgres (backend/docker-compose.yml).")
-
-    await asyncio.to_thread(_run_migrations_sync)
-
-    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
-    SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
-    try:
-        async with SessionLocal() as session:
-            user = User(
-                email=f"u-{uuid4()}@example.com",
-                hashed_password=hash_password("pw"),
-                display_name="T",
-            )
-            session.add(user)
-            await session.commit()
-            await session.refresh(user)
-
-            course = Course(user_id=user.id, name="Networks", description=None)
-            session.add(course)
-            await session.commit()
-            await session.refresh(course)
-
-            content = CourseContent(
-                course_id=course.id,
-                category="media",
-                title="Lecture 1",
-                description=None,
-                file_key="key1",
-                original_filename="l1.mp4",
-                mime_type="video/mp4",
-            )
-            session.add(content)
-            await session.commit()
-            await session.refresh(content)
-
-            asset = VideoAsset(
-                course_id=course.id,
-                content_id=content.id,
-                source_file_key="key1",
-                original_filename="l1.mp4",
-                mime_type="video/mp4",
-            )
-            session.add(asset)
-            await session.commit()
-            await session.refresh(asset)
-
-            session.add(
-                VideoChapter(
-                    video_asset_id=asset.id,
-                    language_code="en",
-                    chapter_index=0,
-                    start_sec=0.0,
-                    end_sec=300.0,
-                    title="Welcome",
-                    description=None,
-                )
-            )
-            await session.commit()
-
-            info = await build_course_info(db=session, course=course, include_chapters=False)
-
-            assert len(info.lectures) == 1
-            (lec,) = info.lectures
-            assert lec.chapters == []
-            assert lec.duration_sec is None
     finally:
         await engine.dispose()
 

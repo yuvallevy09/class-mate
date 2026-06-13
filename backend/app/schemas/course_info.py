@@ -5,44 +5,11 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 
-def _fmt_timestamp(seconds: float | int | None) -> str:
-    """Render seconds as M:SS for prompt strings."""
-    try:
-        s = max(0.0, float(seconds or 0.0))
-    except (TypeError, ValueError):
-        s = 0.0
-    mm = int(s // 60)
-    ss = int(s % 60)
-    return f"{mm}:{ss:02d}"
-
-
-class LectureChapter(BaseModel):
-    """A semantic chapter within a lecture, derived from `video_chapters`.
-
-    Optional in `Lecture.chapters`: when present, the router can route at
-    chapter granularity ("the part of L2 where TCP handshake is discussed")
-    instead of just at the lecture level.
-    """
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: UUID
-    chapter_index: int
-    title: str
-    description: str | None = None
-    start_sec: float
-    end_sec: float
-
-    @property
-    def duration_sec(self) -> float:
-        return max(0.0, float(self.end_sec) - float(self.start_sec))
-
-
 class Lecture(BaseModel):
     """A single lecture in a course.
 
     Backed by a `VideoAsset` row joined with its `CourseContent` row.
-    `id` is the `VideoAsset.id` (the canonical key for transcript / chapters /
+    `id` is the `VideoAsset.id` (the canonical key for transcript / chapter /
     AI summary lookups). `content_id` mirrors `CourseContent.id` and is used
     for in-app links (VideoPlayer page, download redirects, etc.).
 
@@ -51,6 +18,14 @@ class Lecture(BaseModel):
     via `CourseInfo.lecture_by_slug`. Slugs are assigned by the builder when
     the `CourseInfo` is constructed; treat them as opaque from the model's
     perspective.
+
+    The three text fields are deliberately distinct sources and feed different
+    prompt views (see `CourseInfo.to_basic_info` / `to_detailed_info`):
+    - `description` — instructor-authored blurb (`CourseContent.description`).
+    - `ai_description` — short generated one-liner (`VideoAsset.ai_description`),
+      the headline used in the lean catalog view.
+    - `summary` — long generated summary (`VideoAsset.ai_summary`), used in the
+      rich planning view that drives lecture routing.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -65,59 +40,56 @@ class Lecture(BaseModel):
     title: str
     description: str | None = None
 
+    ai_description: str | None = Field(
+        default=None,
+        description="Short generated one-liner (typically `VideoAsset.ai_description`).",
+    )
+
     summary: str | None = Field(
         default=None,
         description="Stored long-form AI summary (typically `VideoAsset.ai_summary`).",
     )
-
-    duration_sec: float | None = None
 
     transcript_ready: bool = Field(
         default=False,
         description="True when transcript ingestion has completed; routers should prefer ready lectures.",
     )
 
-    chapters: list[LectureChapter] = Field(default_factory=list)
-
-    def to_prompt_string(
-        self,
-        *,
-        include_chapters: bool = True,
-        include_summary: bool = True,
-        summary_max_chars: int = 1200,
-    ) -> str:
-        lines: list[str] = []
-        # Use `slug: title` (no brackets) so the slug doesn't collide with the
-        # bracketed `[N]` citation namespace used by `retrieved_docs` in
-        # `AnswerFromContext`. Models were grabbing `[L1]` as a citation key
-        # and the digit-only regex in `_format_reply_with_citation_links`
-        # couldn't rewrite it, leaving the slug as plain text.
+    # `slug: title` (no brackets) keeps the slug out of the bracketed `[N]`
+    # citation namespace used by `retrieved_docs` in `AnswerFromContext` — models
+    # were grabbing `[L1]` as a citation key, which the digit-only regex in
+    # `_format_reply_with_citation_links` couldn't rewrite.
+    def _headline(self) -> str:
         head = f"{self.slug}: {self.title}"
-        if self.duration_sec is not None:
-            head += f" (~{_fmt_timestamp(self.duration_sec)})"
         if not self.transcript_ready:
             head += "  (transcript not ready)"
-        lines.append(head)
+        return head
 
-        if self.description:
-            desc = self.description.strip()
-            if desc:
-                lines.append(f"  description: {desc}")
+    def _catalog_line(self) -> str:
+        """One compact line: headline + a short one-liner when available.
 
-        if include_summary and self.summary:
-            summary = self.summary.strip()
-            if summary:
-                if len(summary) > summary_max_chars:
-                    summary = summary[:summary_max_chars].rstrip() + "…"
-                lines.append(f"  summary: {summary}")
+        Prefers the generated `ai_description`; falls back to the instructor
+        `description`. Used by the lean catalog view (`to_basic_info`).
+        """
+        head = self._headline()
+        blurb = (self.ai_description or self.description or "").strip()
+        if blurb:
+            head += f" — {blurb}"
+        return head
 
-        if include_chapters and self.chapters:
-            lines.append("  chapters:")
-            for ch in self.chapters:
-                lines.append(
-                    f"    - {_fmt_timestamp(ch.start_sec)}–{_fmt_timestamp(ch.end_sec)} {ch.title}"
-                )
+    def _detailed_block(self, *, summary_max_chars: int = 1200) -> str:
+        """Headline + full summary on an indented line.
 
+        Prefers the long `summary`; falls back to `ai_description` then the
+        instructor `description`. Used by the rich planning view
+        (`to_detailed_info`) that drives lecture routing.
+        """
+        lines = [self._headline()]
+        body = (self.summary or self.ai_description or self.description or "").strip()
+        if body:
+            if len(body) > summary_max_chars:
+                body = body[:summary_max_chars].rstrip() + "…"
+            lines.append(f"  summary: {body}")
         return "\n".join(lines)
 
 
@@ -170,44 +142,68 @@ class CourseInfo(BaseModel):
             out.append(lec)
         return out
 
-    def to_prompt_string(
-        self,
-        *,
-        include_chapters: bool = True,
-        include_lecture_summaries: bool = True,
-        summary_max_chars: int = 1200,
-        max_chars: int = 8000,
-    ) -> str:
-        """Compact prompt rendering. Truncates from the bottom if `max_chars` is exceeded.
+    # --- Prompt views ---
+    #
+    # Three nested projections, each tailored to a signature's job (see
+    # `TeachingAssistant`). Increasing detail: header ⊂ basic_info ⊂ detailed_info.
+    # Naming by content (not by consumer) since `basic_info` is shared by several
+    # signatures. All are pure string renderers — no I/O.
 
-        The shape is intentionally stable so every DSPy signature that accepts
-        `course_info` sees the same format and can be optimized against it.
-        """
+    def _course_header_lines(
+        self, *, include_summary: bool, summary_max_chars: int
+    ) -> list[str]:
         lines: list[str] = [f"Course: {self.name}"]
-        if self.description:
-            desc = self.description.strip()
-            if desc:
-                lines.append(f"Description: {desc}")
-        if self.summary:
-            summary = self.summary.strip()
-            if summary:
-                if len(summary) > summary_max_chars:
-                    summary = summary[:summary_max_chars].rstrip() + "…"
-                lines.append(f"Course summary: {summary}")
+        if self.description and self.description.strip():
+            lines.append(f"Description: {self.description.strip()}")
+        if include_summary and self.summary and self.summary.strip():
+            s = self.summary.strip()
+            if summary_max_chars and len(s) > summary_max_chars:
+                s = s[:summary_max_chars].rstrip() + "…"
+            lines.append(f"Course summary: {s}")
+        return lines
 
+    def to_header(self) -> str:
+        """Minimal identity view: course name + instructor description only.
+
+        Tone/scope only — no lecture catalog, no AI summaries. Used by
+        `AnswerFromContext`, where the substantive content comes from the
+        retrieved docs and any catalog/summary text would invite uncited claims.
+        """
+        return "\n".join(
+            self._course_header_lines(include_summary=False, summary_max_chars=0)
+        ).strip()
+
+    def to_basic_info(self) -> str:
+        """Lean catalog view: course header + a one-line entry per lecture
+        (slug, title, transcript-ready flag, short one-liner).
+
+        Used by the router, clarifier, and no-context fallback — enough to judge
+        relevance and redirect, without the full summaries that would tempt the
+        model to answer from the catalog instead of retrieving.
+        """
+        lines = self._course_header_lines(include_summary=True, summary_max_chars=600)
         if self.lectures:
             lines.append("")
             lines.append("Lectures:")
-            for lec in self.lectures:
-                lines.append(
-                    lec.to_prompt_string(
-                        include_chapters=include_chapters,
-                        include_summary=include_lecture_summaries,
-                        summary_max_chars=summary_max_chars,
-                    )
-                )
+            lines.extend(lec._catalog_line() for lec in self.lectures)
+        return "\n".join(lines).strip()
 
-        text = "\n".join(lines).strip()
-        if max_chars and len(text) > max_chars:
-            text = text[:max_chars].rstrip() + "\n…(truncated)"
-        return text
+    def to_detailed_info(self, *, summary_budget: int = 12_000) -> str:
+        """Rich planning view: course header + each lecture with its full summary.
+
+        This is the view that drives lecture routing in `GenerateRetrievalDetails`,
+        so it spends the tokens. Per-lecture summary length scales DOWN with the
+        lecture count to keep the prompt bounded *without dropping later lectures*
+        — every slug stays visible (the old bottom-truncation could silently make
+        late lectures invisible to routing).
+        """
+        lines = self._course_header_lines(include_summary=True, summary_max_chars=1200)
+        if self.lectures:
+            per_lecture = max(200, int(summary_budget) // len(self.lectures))
+            lines.append("")
+            lines.append("Lectures:")
+            lines.extend(
+                lec._detailed_block(summary_max_chars=per_lecture)
+                for lec in self.lectures
+            )
+        return "\n".join(lines).strip()

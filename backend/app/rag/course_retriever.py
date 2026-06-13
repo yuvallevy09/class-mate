@@ -29,7 +29,9 @@ from app.schemas.course_info import CourseInfo, Lecture
 from app.schemas.retrieval import RetrievedDoc
 
 
-RetrievalPath = Literal["explicit", "full_lecture", "hybrid", "none"]
+RetrievalPath = Literal[
+    "explicit", "full_lecture", "hybrid", "hybrid_course_wide", "none"
+]
 
 
 @dataclass(frozen=True)
@@ -155,7 +157,12 @@ class CourseRetriever:
          combined size is under budget, return them (path='full_lecture').
       4. Else run hybrid search scoped to the same slug set, or course-wide
          when the set is empty (path='hybrid').
-      5. If nothing turned up, return `RetrievalDecision(docs=[], path='none')`
+      5. If a *scoped* hybrid search came back empty, retry once course-wide
+         (path='hybrid_course_wide'). This rescues confident-but-wrong or
+         under-covering lecture picks: the model scoped to L3, the answer was
+         in L5, and we'd rather widen than declare defeat. Skipped when the
+         slug set was empty (step 4 already searched course-wide).
+      6. If nothing turned up, return `RetrievalDecision(docs=[], path='none')`
          so the caller can switch to an honest "I couldn't find that" answer.
 
     Stateless across calls; safe to share between requests.
@@ -215,5 +222,21 @@ class CourseRetriever:
         )
         if hybrid_docs:
             return RetrievalDecision(docs=hybrid_docs, path="hybrid")
+
+        # Course-wide fallback: the model scoped to specific lectures but nothing
+        # matched there (a wrong/under-covering pick, or none of the slugs were
+        # transcript-ready). Widen to the whole course before giving up. Skipped
+        # when `routing` was empty — that search was already course-wide, so a
+        # retry would be identical work.
+        if routing:
+            wide_docs = await _perform_hybrid_search(
+                db=db,
+                course_info=course_info,
+                query=contextualized_query,
+                lecture_slugs=None,
+                cfg=self._hybrid_cfg,
+            )
+            if wide_docs:
+                return RetrievalDecision(docs=wide_docs, path="hybrid_course_wide")
 
         return RetrievalDecision(docs=[], path="none")

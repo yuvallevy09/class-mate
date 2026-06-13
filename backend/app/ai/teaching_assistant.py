@@ -255,14 +255,20 @@ class TeachingAssistant(dspy.Module):
         if not uq:
             raise ValueError("user_query must be non-empty")
 
-        ci_str = course_info.to_prompt_string()
+        # Each signature gets a purpose-built projection of the course (see the
+        # `CourseInfo.to_*` views). The router/clarifier/no-context fallback get
+        # the lean catalog; query generation gets the rich summaries that drive
+        # lecture routing; answer-from-context gets only the header (its content
+        # comes from the retrieved docs, and a richer view would invite uncited
+        # claims). Rendered lazily so we only pay for the views a branch uses.
+        ci_basic = course_info.to_basic_info()
         ch_str = conversation_history.to_prompt_string()
 
         debug: dict[str, Any] = {}
 
         route_pred = await asyncio.to_thread(
             self._route_raw,
-            course_info=ci_str,
+            course_info=ci_basic,
             conversation_history=ch_str,
             user_query=uq,
         )
@@ -272,7 +278,7 @@ class TeachingAssistant(dspy.Module):
         if route == "clarify":
             answer = await asyncio.to_thread(
                 self._clarify,
-                course_info=ci_str,
+                course_info=ci_basic,
                 conversation_history=ch_str,
                 user_query=uq,
             )
@@ -281,7 +287,7 @@ class TeachingAssistant(dspy.Module):
         if route == "answer":
             answer = await asyncio.to_thread(
                 self._answer_no_ctx,
-                course_info=ci_str,
+                course_info=ci_basic,
                 conversation_history=ch_str,
                 user_query=uq,
             )
@@ -290,7 +296,7 @@ class TeachingAssistant(dspy.Module):
         # route == "retrieve"
         params = await asyncio.to_thread(
             self._gen_retrieval_params,
-            course_info=ci_str,
+            course_info=course_info.to_detailed_info(),
             conversation_history=ch_str,
             user_query=uq,
         )
@@ -316,7 +322,7 @@ class TeachingAssistant(dspy.Module):
             )
             answer = await asyncio.to_thread(
                 self._answer_no_ctx,
-                course_info=ci_str,
+                course_info=ci_basic,
                 conversation_history=ch_str,
                 user_query=primed_query,
             )
@@ -337,7 +343,7 @@ class TeachingAssistant(dspy.Module):
         ]
         answer = await asyncio.to_thread(
             self._answer_with_ctx,
-            course_info=ci_str,
+            course_info=course_info.to_header(),
             conversation_history=ch_str,
             user_query=uq,
             retrieved_docs=rendered_docs,
