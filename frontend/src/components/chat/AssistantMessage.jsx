@@ -17,6 +17,8 @@ export default function AssistantMessage({
   onOpenVideo,
   onReveal,
   onRevealComplete,
+  onSeek,
+  currentContentId,
 }) {
   const citationModel = useMemo(() => buildCitationModel(citations), [citations]);
   const normalized = useMemo(
@@ -39,8 +41,10 @@ export default function AssistantMessage({
         coordinator: coordinatorRef.current,
         onOpenVideo,
         animatePills: animate && !done,
+        onSeek,
+        currentContentId,
       }),
-    [citationModel, onOpenVideo, animate, done]
+    [citationModel, onOpenVideo, animate, done, onSeek, currentContentId]
   );
 
   return (

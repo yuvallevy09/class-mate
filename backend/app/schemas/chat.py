@@ -24,6 +24,19 @@ class CourseChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     conversation_id: str | None = Field(default=None, max_length=128, validation_alias="conversationId")
 
+    # --- Video-player viewing context (optional) ---
+    # Presence of `watching_video_asset_id` is itself the "video mode" switch:
+    # when set, the chat scopes retrieval toward that lecture and anchors the
+    # answer to what the student is currently watching. Both fields degrade
+    # gracefully — an unknown/not-ready asset is ignored and the turn behaves
+    # like ordinary course chat (resolved in the endpoint, not here).
+    watching_video_asset_id: UUID | None = Field(
+        default=None, validation_alias="watchingVideoAssetId"
+    )
+    watching_timestamp_sec: float | None = Field(
+        default=None, ge=0, validation_alias="watchingTimestampSec"
+    )
+
     @field_validator("message")
     @classmethod
     def _strip_message(cls, v: str) -> str:

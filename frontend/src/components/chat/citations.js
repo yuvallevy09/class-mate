@@ -124,6 +124,7 @@ export function buildCitationModel(citations = []) {
         kind: "video",
         displayNumber: g.leaderIndex,
         groupKey: `video:${g.contentId}`,
+        contentId: g.contentId,
         title: g.title,
         chipLabel: getChipLabel(extra, g.title),
         snippet,

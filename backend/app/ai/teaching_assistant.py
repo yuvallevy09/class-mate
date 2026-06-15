@@ -43,10 +43,12 @@ from app.rag.course_retriever import CourseRetriever, RetrievalPath
 from app.rag.explicit_retrieve import (
     TARGET_LECTURE_SLUG_DESC,
     TARGET_TIMESTAMP_DESC,
+    retrieve_recent_window,
 )
 from app.schemas.conversation_history import ConversationHistory
 from app.schemas.course_info import CourseInfo
 from app.schemas.retrieval import RetrievedDoc
+from app.schemas.viewing_context import ViewingContext
 
 
 # Generous default so structured-output signatures (especially the long
@@ -209,6 +211,104 @@ def _stash_reasoning(debug: dict[str, Any], key: str, pred: object) -> None:
         debug[key] = text
 
 
+# --- Video-mode helpers ---
+#
+# Pure functions (no I/O) shared by `aforward` and `astream` so video-mode
+# behavior stays identical across the blocking and streaming paths.
+
+
+def _fmt_mmss(seconds: float | None) -> str:
+    try:
+        s = max(0.0, float(seconds or 0.0))
+    except (TypeError, ValueError):
+        s = 0.0
+    return f"{int(s // 60)}:{int(s % 60):02d}"
+
+
+def _viewing_note(viewing: ViewingContext | None) -> str:
+    """One-line anchor describing what the student is watching, or '' when not
+    in video mode.
+
+    Prefixed to the CourseInfo views (via `_view`) so every signature can
+    resolve deictic references — "this", "that", "what he just said" — to the
+    current lecture and playback position.
+    """
+    if viewing is None:
+        return ""
+    where = f"{viewing.lecture_slug}: {viewing.lecture_title}"
+    if viewing.timestamp_sec is not None:
+        return (
+            f"The student is currently watching {where} at "
+            f"{_fmt_mmss(viewing.timestamp_sec)} (video player open)."
+        )
+    return f"The student is currently watching {where} (video player open)."
+
+
+def _view(view: str, note: str) -> str:
+    """Prefix a rendered CourseInfo view with the viewing note when present."""
+    return f"{note}\n\n{view}" if note else view
+
+
+def _apply_soft_scope(
+    lecture_routing: list[str], viewing: ViewingContext | None
+) -> list[str]:
+    """Soft-scope retrieval toward the watched lecture without jailing it.
+
+    - Not in video mode: routing unchanged.
+    - LLM emitted an empty routing (its signal for "no lecture is more relevant —
+      search course-wide"): preserve it, so course-wide questions asked while
+      watching still reach the whole course (the `CourseRetriever` treats an
+      empty slug set as course-wide).
+    - LLM scoped to specific lectures: ensure the watched lecture is in the set
+      (preferred first), so in-lecture questions stay anchored while the model's
+      own picks — and the course-wide empty-result fallback — keep other
+      lectures reachable.
+    """
+    routing = [s for s in (lecture_routing or []) if isinstance(s, str) and s.strip()]
+    if viewing is None or not routing:
+        return routing
+    if viewing.lecture_slug in routing:
+        return routing
+    return [viewing.lecture_slug, *routing]
+
+
+def _doc_contains(outer: RetrievedDoc, inner: RetrievedDoc) -> bool:
+    """True when `inner`'s time range sits entirely within `outer`'s (same lecture)."""
+    return (
+        outer.lecture_id == inner.lecture_id
+        and outer.start_sec is not None
+        and outer.end_sec is not None
+        and inner.start_sec is not None
+        and inner.end_sec is not None
+        and inner.start_sec >= outer.start_sec
+        and inner.end_sec <= outer.end_sec
+    )
+
+
+def _merge_recent(
+    recent_docs: list[RetrievedDoc], retrieved_docs: list[RetrievedDoc]
+) -> list[RetrievedDoc]:
+    """Merge the recent-window anchor with retrieval results, removing redundancy
+    so the same passage isn't cited twice.
+
+    - If a retrieved doc already *covers* the recent window (e.g. near the start
+      of a lecture, a chunk spans 0:00–0:46 while the window is 0:00–0:08), the
+      anchor would just duplicate it — drop the anchor, keep the retrieved docs.
+    - Otherwise prepend the anchor (so it becomes citation [1] — "currently
+      watching") and drop any retrieved doc fully contained in it.
+
+    A doc that only partially overlaps is kept either way (it carries content the
+    other doesn't).
+    """
+    if not recent_docs:
+        return list(retrieved_docs)
+    rw = recent_docs[0]
+    if any(_doc_contains(d, rw) for d in retrieved_docs):
+        return list(retrieved_docs)
+    kept = [d for d in retrieved_docs if not _doc_contains(rw, d)]
+    return [rw, *kept]
+
+
 class TeachingAssistant(dspy.Module):
     """DSPy orchestrator for one chat turn.
 
@@ -252,6 +352,27 @@ class TeachingAssistant(dspy.Module):
             )
         return self._lm
 
+    async def _recent_window(
+        self,
+        *,
+        db: AsyncSession,
+        course_info: CourseInfo,
+        viewing: ViewingContext | None,
+    ) -> list[RetrievedDoc]:
+        """The just-watched transcript window as a 0- or 1-element doc list.
+
+        Empty when not in video mode, when the player sent no playback position,
+        or when the window holds no transcript (see `retrieve_recent_window`).
+        """
+        if viewing is None:
+            return []
+        return await retrieve_recent_window(
+            db=db,
+            course_info=course_info,
+            lecture_slug=viewing.lecture_slug,
+            head_sec=viewing.timestamp_sec,
+        )
+
     async def aforward(
         self,
         *,
@@ -259,6 +380,7 @@ class TeachingAssistant(dspy.Module):
         course_info: CourseInfo,
         conversation_history: ConversationHistory,
         user_query: str,
+        viewing: ViewingContext | None = None,
     ) -> TeachingAssistantResult:
         uq = (user_query or "").strip()
         if not uq:
@@ -270,7 +392,12 @@ class TeachingAssistant(dspy.Module):
         # lecture routing; answer-from-context gets only the header (its content
         # comes from the retrieved docs, and a richer view would invite uncited
         # claims). Rendered lazily so we only pay for the views a branch uses.
-        ci_basic = course_info.to_basic_info()
+        #
+        # In video mode (`viewing` set) a one-line anchor is prefixed to every
+        # view so signatures can resolve deictic references to the watched
+        # lecture/position.
+        note = _viewing_note(viewing)
+        ci_basic = _view(course_info.to_basic_info(), note)
         ch_str = conversation_history.to_prompt_string()
 
         debug: dict[str, Any] = {}
@@ -305,7 +432,7 @@ class TeachingAssistant(dspy.Module):
         # route == "retrieve"
         params = await asyncio.to_thread(
             self._gen_retrieval_params,
-            course_info=course_info.to_detailed_info(),
+            course_info=_view(course_info.to_detailed_info(), note),
             conversation_history=ch_str,
             user_query=uq,
         )
@@ -315,12 +442,22 @@ class TeachingAssistant(dspy.Module):
             db=db,
             course_info=course_info,
             contextualized_query=(str(params.contextualized_query or "").strip() or uq),
-            lecture_routing=list(params.lecture_routing or []),
+            lecture_routing=_apply_soft_scope(list(params.lecture_routing or []), viewing),
             target_lecture_slug=params.target_lecture_slug,
             target_timestamp=params.target_timestamp,
         )
 
-        if not decision.docs:
+        # Video mode: prepend the just-watched transcript window as a citable
+        # anchor. It's additive — merged with (not a replacement for) whatever
+        # the cascade retrieved, and can stand alone when retrieval came back
+        # empty (so a deictic question still gets answered from on-screen text).
+        recent_docs = await self._recent_window(db=db, course_info=course_info, viewing=viewing)
+        docs = _merge_recent(recent_docs, list(decision.docs))
+        if viewing is not None:
+            debug["video_mode"] = True
+            debug["recent_window_attached"] = bool(recent_docs)
+
+        if not docs:
             # Terminal "no context" branch: tell the model retrieval failed so
             # it answers honestly instead of hallucinating from missing context.
             primed_query = (
@@ -348,11 +485,11 @@ class TeachingAssistant(dspy.Module):
         # response's `citations` array (built from these same docs in
         # `chat_v2._docs_to_citations`).
         rendered_docs = [
-            d.to_prompt_string(index=i) for i, d in enumerate(decision.docs, start=1)
+            d.to_prompt_string(index=i) for i, d in enumerate(docs, start=1)
         ]
         answer = await asyncio.to_thread(
             self._answer_with_ctx,
-            course_info=course_info.to_header(),
+            course_info=_view(course_info.to_header(), note),
             conversation_history=ch_str,
             user_query=uq,
             retrieved_docs=rendered_docs,
@@ -360,8 +497,11 @@ class TeachingAssistant(dspy.Module):
         return TeachingAssistantResult(
             answer=answer,
             route="retrieve",
-            retrieval_path=decision.path,
-            retrieved_docs=list(decision.docs),
+            # When retrieval was empty and only the recent window remains, label
+            # the path 'explicit' (deterministic timestamp retrieval); otherwise
+            # keep the cascade's path.
+            retrieval_path=decision.path if decision.docs else "explicit",
+            retrieved_docs=docs,
             debug=debug,
         )
 
@@ -372,6 +512,7 @@ class TeachingAssistant(dspy.Module):
         course_info: CourseInfo,
         conversation_history: ConversationHistory,
         user_query: str,
+        viewing: ViewingContext | None = None,
     ) -> AsyncIterator[Event]:
         """Streaming sibling of `aforward`: walks the same cascade but yields
         typed events as it goes, token-streaming **every** LLM call.
@@ -391,7 +532,8 @@ class TeachingAssistant(dspy.Module):
         if not uq:
             raise ValueError("user_query must be non-empty")
 
-        ci_basic = course_info.to_basic_info()
+        note = _viewing_note(viewing)
+        ci_basic = _view(course_info.to_basic_info(), note)
         ch_str = conversation_history.to_prompt_string()
         debug: dict[str, Any] = {}
         # Reasoning is streamed from up to three sources (router → query-gen →
@@ -441,7 +583,7 @@ class TeachingAssistant(dspy.Module):
         async for field, payload in self._astream_predict(
             self.query_generator,
             listen_fields=["reasoning"],
-            course_info=course_info.to_detailed_info(),
+            course_info=_view(course_info.to_detailed_info(), note),
             conversation_history=ch_str,
             user_query=uq,
         ):
@@ -459,12 +601,19 @@ class TeachingAssistant(dspy.Module):
             db=db,
             course_info=course_info,
             contextualized_query=(str(params.contextualized_query or "").strip() or uq),
-            lecture_routing=list(params.lecture_routing or []),
+            lecture_routing=_apply_soft_scope(list(params.lecture_routing or []), viewing),
             target_lecture_slug=params.target_lecture_slug,
             target_timestamp=params.target_timestamp,
         )
 
-        if not decision.docs:
+        # Video mode: prepend the just-watched window (see `aforward`).
+        recent_docs = await self._recent_window(db=db, course_info=course_info, viewing=viewing)
+        docs = _merge_recent(recent_docs, list(decision.docs))
+        if viewing is not None:
+            debug["video_mode"] = True
+            debug["recent_window_attached"] = bool(recent_docs)
+
+        if not docs:
             # Terminal "no context" branch: prime an honest answer, still streamed.
             primed_query = (
                 f"{uq}\n\n"
@@ -493,11 +642,11 @@ class TeachingAssistant(dspy.Module):
             return
 
         # Sources first, so the client can render them while the answer streams.
-        yield CitationsEvent(docs=list(decision.docs))
+        yield CitationsEvent(docs=list(docs))
         yield StatusEvent(stage="generating", label=None)
 
         rendered_docs = [
-            d.to_prompt_string(index=i) for i, d in enumerate(decision.docs, start=1)
+            d.to_prompt_string(index=i) for i, d in enumerate(docs, start=1)
         ]
         out = {}
         async for ev in self._emit_answer(
@@ -505,7 +654,7 @@ class TeachingAssistant(dspy.Module):
             answer_field="answer",
             out=out,
             thinking_separator="\n\n" if thinking_seen else "",
-            course_info=course_info.to_header(),
+            course_info=_view(course_info.to_header(), note),
             conversation_history=ch_str,
             user_query=uq,
             retrieved_docs=rendered_docs,
@@ -514,8 +663,8 @@ class TeachingAssistant(dspy.Module):
         yield DoneEvent(
             answer=out.get("answer", ""),
             route="retrieve",
-            retrieval_path=decision.path,
-            retrieved_docs=list(decision.docs),
+            retrieval_path=decision.path if decision.docs else "explicit",
+            retrieved_docs=list(docs),
             debug=debug,
         )
 

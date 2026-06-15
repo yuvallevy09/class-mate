@@ -12,6 +12,8 @@ export function buildMarkdownComponents({
   coordinator,
   onOpenVideo,
   animatePills = false,
+  onSeek,
+  currentContentId,
 } = {}) {
   return {
     p: ({ children }) => <p className="my-2 whitespace-pre-wrap">{children}</p>,
@@ -39,6 +41,8 @@ export function buildMarkdownComponents({
             citationModel={citationModel}
             coordinator={coordinator}
             popIn={animatePills}
+            onSeek={onSeek}
+            currentContentId={currentContentId}
           />
         );
       }

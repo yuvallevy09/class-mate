@@ -9,7 +9,9 @@ import { normalizeCitationMarkers } from "@/components/chat/citations";
  * Fallback (VITE_CHAT_STREAMING=false): the legacy blocking POST /chat-v2 that
  * synthesizes a couple of events. Both implement the same handler contract:
  *
- * startChatTurn({ courseId, message, conversationId }, handlers) -> { cancel() }
+ * startChatTurn({ courseId, message, conversationId, viewing }, handlers) -> { cancel() }
+ *   viewing (optional): { watchingVideoAssetId, watchingTimestampSec } — sent so
+ *   the backend scopes retrieval to the lecture being watched (video chat).
  * handlers:
  *   onStatus({ stage, label })  stage: "searching" | "reading" | "generating"
  *   onThinkingDelta(text)       appended reasoning text
@@ -28,7 +30,7 @@ export function startChatTurn(args, handlers = {}) {
 
 // --- Real SSE adapter -------------------------------------------------------
 
-function _startStreaming({ courseId, message, conversationId }, handlers = {}) {
+function _startStreaming({ courseId, message, conversationId, viewing = null }, handlers = {}) {
   let cancelled = false;
   const controller = new AbortController();
   const safe = (fn, ...a) => {
@@ -79,7 +81,12 @@ function _startStreaming({ courseId, message, conversationId }, handlers = {}) {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
-        body: JSON.stringify({ message: String(message), conversationId: conversationId ?? null }),
+        body: JSON.stringify({
+          message: String(message),
+          conversationId: conversationId ?? null,
+          watchingVideoAssetId: viewing?.watchingVideoAssetId ?? null,
+          watchingTimestampSec: viewing?.watchingTimestampSec ?? null,
+        }),
         signal: controller.signal,
       });
 
@@ -132,7 +139,7 @@ function _startStreaming({ courseId, message, conversationId }, handlers = {}) {
 
 // --- Legacy blocking fallback (VITE_CHAT_STREAMING=false) --------------------
 
-function _startBlocking({ courseId, message, conversationId }, handlers = {}) {
+function _startBlocking({ courseId, message, conversationId, viewing = null }, handlers = {}) {
   let cancelled = false;
   const safe = (fn, ...args) => {
     if (!cancelled && typeof fn === "function") fn(...args);
@@ -147,7 +154,13 @@ function _startBlocking({ courseId, message, conversationId }, handlers = {}) {
 
   (async () => {
     try {
-      const res = await sendCourseChat({ courseId, message, conversationId });
+      const res = await sendCourseChat({
+        courseId,
+        message,
+        conversationId,
+        watchingVideoAssetId: viewing?.watchingVideoAssetId ?? null,
+        watchingTimestampSec: viewing?.watchingTimestampSec ?? null,
+      });
       clearTimeout(generatingTimer);
       const citations = Array.isArray(res?.citations) ? res.citations : [];
       const normalized = normalizeCitationMarkers(String(res?.text ?? ""), citations);

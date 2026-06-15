@@ -131,6 +131,18 @@ class CourseInfo(BaseModel):
                 return lec
         return None
 
+    def lecture_by_id(self, video_asset_id: UUID) -> Lecture | None:
+        """Resolve a lecture by its `VideoAsset.id`.
+
+        Used to turn the player's `watching_video_asset_id` into a `Lecture`
+        (and thence a slug) so viewing context can be scoped/anchored. Mirrors
+        `lecture_by_slug`; returns None when the id isn't part of this course.
+        """
+        for lec in self.lectures:
+            if lec.id == video_asset_id:
+                return lec
+        return None
+
     def lectures_by_slugs(self, slugs: list[str]) -> list[Lecture]:
         seen: set[str] = set()
         out: list[Lecture] = []

@@ -13,6 +13,9 @@ class ChatConversationPublic(BaseModel):
 
     id: UUID
     course_id: UUID
+    # Set when the conversation was started from the video player (the lecture it
+    # belongs to); null for course-level chat.
+    video_asset_id: UUID | None = None
     title: str | None
     created_at: datetime
     last_message_at: datetime

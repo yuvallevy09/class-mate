@@ -9,7 +9,7 @@ import {
   MessageSquare,
   Sparkles,
   X,
-  Send,
+  ArrowUp,
   Loader2,
   Maximize2,
   Minimize2,
@@ -18,10 +18,13 @@ import {
 import { createPageUrl } from "@/utils";
 import { getCourseContent, getDownloadUrl } from "@/api/courseContents";
 import { getVideoAssetSummary, listVideoAssets, listVideoAssetSegments } from "@/api/videoAssets";
-import { sendVideoChat } from "@/api/chat";
+import { useAssistantTurn } from "@/hooks/useAssistantTurn";
 
 import Navbar from "@/components/Navbar";
 import CourseSidebar from "@/components/CourseSidebar";
+import AssistantMessage from "@/components/chat/AssistantMessage";
+import ThinkingDisclosure from "@/components/chat/ThinkingDisclosure";
+import UserMessage from "@/components/chat/UserMessage";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -106,264 +109,6 @@ function extractPlainText(node) {
   return "";
 }
 
-function isVideoCitation(citation) {
-  const extra = citation?.extra || {};
-  const t = String(extra?.type || "").toLowerCase();
-  const citedContentId = citation?.content_id || citation?.contentId || null;
-  return t === "video" && !!citedContentId;
-}
-
-function getCitationContentId(citation) {
-  return citation?.content_id || citation?.contentId || null;
-}
-
-function getCitationTitle(citation) {
-  const extra = citation?.extra || {};
-  return (
-    String(citation?.title || "").trim() ||
-    String(extra?.original_filename || "").trim() ||
-    String(getCitationContentId(citation) || "").trim() ||
-    "Course content"
-  );
-}
-
-function buildSourcesModel(citations = []) {
-  const items = Array.isArray(citations) ? citations : [];
-  const videoGroups = new Map();
-  const nonVideo = [];
-
-  items.forEach((citation, index) => {
-    const i = index + 1;
-    if (!isVideoCitation(citation)) {
-      nonVideo.push({ i, citation });
-      return;
-    }
-
-    const contentId = String(getCitationContentId(citation));
-    const extra = citation?.extra || {};
-    const start = Number(extra?.startSec || 0);
-    const end = Number(extra?.endSec || start);
-    const sInt = Math.max(0, Math.floor(start));
-    const eInt = Math.max(0, Math.floor(end));
-    const rangeKey = `${sInt}-${eInt}`;
-    const chapterId = extra?.chapterId ?? extra?.chapter_id ?? null;
-
-    if (!videoGroups.has(contentId)) {
-      videoGroups.set(contentId, {
-        contentId,
-        leaderIndex: i,
-        title: getCitationTitle(citation),
-        ranges: new Map(),
-      });
-    }
-
-    const group = videoGroups.get(contentId);
-    group.leaderIndex = Math.min(group.leaderIndex, i);
-    if (!group.title) group.title = getCitationTitle(citation);
-
-    if (!group.ranges.has(rangeKey)) {
-      group.ranges.set(rangeKey, {
-        s: sInt,
-        e: eInt,
-        url: typeof citation?.url === "string" ? citation.url : null,
-        chapterId: chapterId ? String(chapterId) : null,
-        chapterTitle:
-          (typeof extra?.chapterTitle === "string" && extra.chapterTitle.trim()) || null,
-        citationIndices: [],
-      });
-    }
-
-    const range = group.ranges.get(rangeKey);
-    if (!range.url && typeof citation?.url === "string") range.url = citation.url;
-    if (!range.chapterId && chapterId) range.chapterId = String(chapterId);
-    if (!range.chapterTitle && typeof extra?.chapterTitle === "string" && extra.chapterTitle.trim()) {
-      range.chapterTitle = extra.chapterTitle.trim();
-    }
-    range.citationIndices.push(i);
-  });
-
-  const video = Array.from(videoGroups.values())
-    .sort((a, b) => a.leaderIndex - b.leaderIndex)
-    .map((group) => {
-      const ranges = Array.from(group.ranges.values());
-      return {
-        ...group,
-        ranges: ranges.map((range, index) => ({
-          ...range,
-          letter: String.fromCharCode("a".charCodeAt(0) + Math.min(index, 25)),
-        })),
-      };
-    });
-
-  return { video, nonVideo };
-}
-
-function getSourceAnchorId(messageKey, citationIndex) {
-  return `cm-src-${messageKey}-${citationIndex}`;
-}
-
-function rewriteCitationAnchors(text, messageKey) {
-  return String(text || "").replace(/#cm-src-(\d+)/g, (_match, rawIndex) => {
-    return `#${getSourceAnchorId(messageKey, Number(rawIndex))}`;
-  });
-}
-
-function VideoChatSources({ citations, messageKey, currentContentId, onSeekToSeconds }) {
-  const model = useMemo(() => buildSourcesModel(citations), [citations]);
-  const hasAny = (model.video?.length || 0) + (model.nonVideo?.length || 0) > 0;
-  if (!hasAny) return null;
-
-  const isRedundantChapterTitle = (title) => {
-    const normalized = String(title || "").trim();
-    if (!normalized) return true;
-    return normalized.toLowerCase() === "full lecture";
-  };
-
-  return (
-    <div className="mt-4 border-t border-white/10 pt-4 text-xs text-gray-200/90">
-      <div className="mb-2 font-semibold">Sources</div>
-
-      {!!model.video?.length && (
-        <div className="space-y-3">
-          {model.video.map((group) => {
-            const isCurrentVideo = String(group.contentId) === String(currentContentId || "");
-            return (
-              <div key={group.contentId}>
-                <div className="font-semibold">
-                  {group.leaderIndex}. {group.title} <span className="text-gray-300">Video</span>
-                </div>
-                {(() => {
-                  const meaningfulChapters = Array.from(
-                    new Set(
-                      (group.ranges || [])
-                        .map((range) => String(range?.chapterTitle || "").trim())
-                        .filter((title) => title && !isRedundantChapterTitle(title))
-                    )
-                  );
-                  const shouldGroupByChapter = meaningfulChapters.length > 1;
-
-                  const renderRangeItem = (range) => {
-                    const timeLabel =
-                      range.e !== range.s ? `${fmtTimestamp(range.s)}-${fmtTimestamp(range.e)}` : fmtTimestamp(range.s);
-                    const showInlineChapter =
-                      !shouldGroupByChapter && !isRedundantChapterTitle(range.chapterTitle);
-                    const content = isCurrentVideo ? (
-                      <button
-                        type="button"
-                        className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
-                        onClick={() => onSeekToSeconds(range.s)}
-                      >
-                        {timeLabel}
-                      </button>
-                    ) : range.url ? (
-                      <a
-                        href={range.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
-                      >
-                        {timeLabel}
-                      </a>
-                    ) : (
-                      <span>{timeLabel}</span>
-                    );
-
-                    return (
-                      <li key={`${group.contentId}:${range.s}-${range.e}:${String(range.chapterId || "")}`}>
-                        {Array.isArray(range.citationIndices) &&
-                          range.citationIndices.map((citationIndex) => (
-                            <span
-                              key={citationIndex}
-                              id={getSourceAnchorId(messageKey, citationIndex)}
-                              className="relative -top-20"
-                            />
-                          ))}
-                        <span className="font-semibold">{range.letter}.</span> {content}
-                        {showInlineChapter ? (
-                          <span className="text-gray-300"> {" - "} {String(range.chapterTitle).trim()}</span>
-                        ) : null}
-                      </li>
-                    );
-                  };
-
-                  if (!shouldGroupByChapter) {
-                    return <ul className="mt-1 ml-5 list-disc space-y-1">{group.ranges.map(renderRangeItem)}</ul>;
-                  }
-
-                  const groupedRanges = new Map();
-                  for (const range of group.ranges || []) {
-                    const title = String(range?.chapterTitle || "").trim();
-                    const key = title && !isRedundantChapterTitle(title) ? title : "Other";
-                    if (!groupedRanges.has(key)) groupedRanges.set(key, []);
-                    groupedRanges.get(key).push(range);
-                  }
-
-                  return (
-                    <div className="mt-2 space-y-3">
-                      {Array.from(groupedRanges.entries()).map(([chapterTitle, ranges]) => (
-                        <div key={chapterTitle}>
-                          {chapterTitle !== "Other" ? (
-                            <div className="font-medium text-gray-300">{chapterTitle}</div>
-                          ) : null}
-                          <ul className="mt-1 ml-5 list-disc space-y-1">{ranges.map(renderRangeItem)}</ul>
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })()}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {!!model.nonVideo?.length && (
-        <div className={`space-y-1 ${model.video?.length ? "mt-4" : ""}`}>
-          {model.nonVideo.map(({ i, citation }) => {
-            const extra = citation?.extra || {};
-            const title = getCitationTitle(citation);
-            const pageStart = extra?.pageStart ?? extra?.page_start ?? null;
-            const pageEnd = extra?.pageEnd ?? extra?.page_end ?? null;
-            const pageLabel =
-              pageStart || pageEnd
-                ? (() => {
-                    const a = Number(pageStart || pageEnd);
-                    const b = Number(pageEnd || pageStart);
-                    if (Number.isFinite(a) && Number.isFinite(b)) {
-                      return a === b ? ` (p.${a})` : ` (p.${a}-${b})`;
-                    }
-                    return "";
-                  })()
-                : "";
-            const url = typeof citation?.url === "string" ? citation.url : null;
-
-            return (
-              <div key={i} className="leading-relaxed">
-                <span id={getSourceAnchorId(messageKey, i)} className="relative -top-20" />
-                <span className="font-semibold">{i}.</span> {title}
-                {pageLabel}
-                {url ? (
-                  <>
-                    {" "}
-                    -{" "}
-                    <a
-                      href={url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
-                    >
-                      Open source
-                    </a>
-                  </>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // Shared height for the video, transcript, chat, and expanded AI Summary cards.
 // Sized so the collapsed AI Summary bar (124px, matching the floating toggle
@@ -391,8 +136,11 @@ export default function VideoPlayer() {
   }, [location.search]);
 
   const [message, setMessage] = useState("");
-  const [isTyping, setIsTyping] = useState(false);
   const [messages, setMessages] = useState([]);
+  // Reset on every page entry / video switch — v1 starts a fresh conversation
+  // each visit (no resume yet); captured from the first turn's response and
+  // reused for the rest of the visit so the thread stays coherent.
+  const [conversationId, setConversationId] = useState(null);
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isChatPopoutOpen, setIsChatPopoutOpen] = useState(false);
@@ -458,13 +206,59 @@ export default function VideoPlayer() {
     },
   });
 
-  // Reset per-video transient UI state when navigating between videos.
+  // Viewing context sent with each turn: the watched lecture + the live
+  // playback head (read at send time, so it reflects where the student is now).
+  const getViewing = () => {
+    if (!videoAssetId) return null;
+    const raw = videoRef.current?.currentTime;
+    const t = Number.isFinite(raw) ? Math.max(0, raw) : null;
+    return { watchingVideoAssetId: videoAssetId, watchingTimestampSec: t };
+  };
+
+  const handleBeforeSend = ({ text }) => {
+    setMessage("");
+    setMessages((prev) => [...prev, { role: "user", content: text }]);
+  };
+
+  const handlePersisted = (info) => {
+    const cid = (typeof info?.conversationId === "string" && info.conversationId) || null;
+    if (cid) setConversationId(cid);
+    // Commit the backend's link-formatted text verbatim (it carries the
+    // `#cm-src-N` anchors VideoChatSources renders); do NOT use the hook's
+    // pill-normalized answer here — that's the course-chat citation format.
+    const content = (typeof info?.fullText === "string" && info.fullText) || "";
+    const citations = Array.isArray(info?.citations) ? info.citations : [];
+    setMessages((prev) => [...prev, { role: "assistant", content, citations }]);
+    clearTurn();
+  };
+
+  const handleSendError = (err) => {
+    const msg = err?.data?.detail || err?.message || "Failed to send message. Please try again.";
+    setMessages((prev) => [
+      ...prev,
+      { role: "assistant", content: `Sorry, I encountered an error. ${msg}`, citations: [] },
+    ]);
+  };
+
+  const { turn, sendMessage, clearTurn, cancel, isPending } = useAssistantTurn({
+    courseId,
+    conversationId,
+    getViewing,
+    onBeforeSend: handleBeforeSend,
+    onPersisted: handlePersisted,
+    onError: handleSendError,
+  });
+
+  // Reset per-video transient UI state when navigating between videos: fresh
+  // conversation, empty thread, and abort any in-flight turn (so its onDone
+  // can't append a stray message to the new video's thread).
   useEffect(() => {
     setMessage("");
-    setIsTyping(false);
     setMessages([]);
+    setConversationId(null);
+    cancel();
     setIsSummaryExpanded(false);
-  }, [courseId, contentId]);
+  }, [courseId, contentId, cancel]);
 
   const seekToSeconds = (seconds) => {
     const el = videoRef.current;
@@ -617,45 +411,10 @@ export default function VideoPlayer() {
     [seekAndScrollToSeconds]
   );
 
-  const handleSend = async () => {
+  const handleSend = () => {
     const userMessage = String(message || "").trim();
-    if (!userMessage || isTyping || !courseId) return;
-
-    const history = messages.map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
-
-    setMessage("");
-    setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
-    setIsTyping(true);
-
-    try {
-      const res = await sendVideoChat({
-        courseId,
-        mode: "chat",
-        message: userMessage,
-        history,
-        contentId,
-        videoAssetId,
-      });
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: res?.text || "",
-          citations: Array.isArray(res?.citations) ? res.citations : [],
-        },
-      ]);
-    } catch (e) {
-      const msg = e?.data?.detail || e?.message || "Failed to send message. Please try again.";
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: `Sorry, I encountered an error. ${msg}`, citations: [] },
-      ]);
-    } finally {
-      setIsTyping(false);
-    }
+    if (!userMessage || isPending || !courseId) return;
+    sendMessage(userMessage);
   };
 
   const handleKeyDown = (e) => {
@@ -706,7 +465,20 @@ export default function VideoPlayer() {
 
   useEffect(() => {
     window.requestAnimationFrame(() => scrollChatToBottom("smooth"));
-  }, [messages.length, isTyping]);
+  }, [messages.length, turn]);
+
+  // Assistant body, shared by committed messages and the live turn. Uses the
+  // course-chat renderer (inline citation pills + popover) for visual parity;
+  // `onSeek`/`currentContentId` make timestamps for the on-screen lecture seek
+  // the in-page player instead of opening a new tab.
+  const renderAssistantBody = (content, citations) => (
+    <AssistantMessage
+      content={content}
+      citations={citations}
+      onSeek={seekAndScrollToSeconds}
+      currentContentId={contentId}
+    />
+  );
 
   const renderChatPanel = ({ scrollHeightClass, variant }) => {
     const isPopout = variant === "popout";
@@ -717,7 +489,7 @@ export default function VideoPlayer() {
       exit={{ height: 0, opacity: 0 }}
       className="glass-card rounded-2xl overflow-hidden"
     >
-      <div className={`flex flex-col ${isPopout ? "" : CARD_HEIGHT_CLASS}`}>
+      <div className={`relative flex flex-col ${isPopout ? "" : CARD_HEIGHT_CLASS}`}>
       <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
           <MessageSquare className="w-5 h-5 text-purple-400" />
@@ -759,21 +531,15 @@ export default function VideoPlayer() {
         </div>
       </div>
 
-      <div ref={chatScrollRef} className={`${scrollHeightClass} overflow-y-auto px-4 py-4`}>
+      <div ref={chatScrollRef} className={`${scrollHeightClass} overflow-y-auto px-4 pt-4 pb-24`}>
         <div className="space-y-4">
-          {messages.length === 0 && !isTyping && (
+          {messages.length === 0 && !turn && (
             <div className="text-center py-8">
               <Sparkles className="w-10 h-10 text-purple-400 mx-auto mb-2" />
               <p className="text-gray-400 text-sm">Ask questions about the lecture</p>
             </div>
           )}
           {messages.map((msg, index) => {
-            const messageKey = String(index);
-            const assistantMarkdown = rewriteCitationAnchors(
-              String(linkifySummaryTimestamps(msg.content || "") || ""),
-              messageKey
-            );
-
             return (
               <motion.div
                 key={`${msg.role}-${index}`}
@@ -781,38 +547,28 @@ export default function VideoPlayer() {
                 animate={{ opacity: 1, y: 0 }}
                 className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
               >
-                <div className="max-w-[85%]">
-                  <div
-                    className={`rounded-2xl px-4 py-2 ${
-                      msg.role === "user"
-                        ? "bg-gradient-to-r from-pink-500 via-purple-500 to-blue-500 text-white"
-                        : "glass-card text-gray-100"
-                    }`}
-                  >
-                    {msg.role === "assistant" ? (
-                      <div className="text-sm leading-relaxed">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                          {assistantMarkdown}
-                        </ReactMarkdown>
-                        <VideoChatSources
-                          citations={msg.citations}
-                          messageKey={messageKey}
-                          currentContentId={contentId}
-                          onSeekToSeconds={seekAndScrollToSeconds}
-                        />
-                      </div>
-                    ) : (
-                      <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                    )}
+                {msg.role === "user" ? (
+                  <UserMessage content={msg.content} />
+                ) : (
+                  <div className="w-full">
+                    {msg.thinking ? <ThinkingDisclosure thinkingText={msg.thinking} /> : null}
+                    {renderAssistantBody(msg.content, msg.citations)}
                   </div>
-                </div>
+                )}
               </motion.div>
             );
           })}
-          {isTyping && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex justify-start">
-              <div className="glass-card rounded-2xl px-4 py-2">
-                <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
+          {turn && (
+            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex justify-start">
+              <div className="w-full">
+                <ThinkingDisclosure
+                  phase={turn.phase}
+                  stage={turn.stage}
+                  statusLabel={turn.statusLabel}
+                  thinkingText={turn.thinkingText}
+                  thoughtForSecs={turn.thoughtForSecs}
+                />
+                {turn.answer ? renderAssistantBody(turn.answer, turn.citations) : null}
               </div>
             </motion.div>
           )}
@@ -820,25 +576,29 @@ export default function VideoPlayer() {
         </div>
       </div>
 
-      <div className="p-4 border-t border-white/5 shrink-0">
-        <div className="glass-card rounded-xl p-2 flex items-end gap-2">
-          <textarea
-            ref={textareaRef}
-            placeholder="Ask a question..."
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={!courseId || isTyping}
-            className="flex-1 bg-transparent border-0 text-white placeholder:text-gray-500 resize-none min-h-[44px] max-h-[120px] outline-none ring-0 focus:outline-none focus:ring-0 focus:bg-transparent focus-visible:outline-none focus-visible:ring-0 focus-visible:bg-transparent"
-            rows={1}
-          />
-          <Button
-            onClick={handleSend}
-            disabled={!String(message || "").trim() || isTyping}
-            className="btn-gradient rounded-xl h-10 w-10 p-0 shrink-0"
-          >
-            <Send className="w-4 h-4" />
-          </Button>
+      {/* Floating input bar (mirrors CourseChat): centered pill over the
+          messages rather than a full-width docked section. */}
+      <div className="absolute inset-x-0 bottom-4 z-20 px-4 pointer-events-none">
+        <div className="w-full max-w-[560px] mx-auto pointer-events-auto">
+          <div className="flex items-end gap-2.5 rounded-[22px] border border-white/10 bg-[#16151C]/80 py-1.5 pl-[18px] pr-1.5 backdrop-blur-xl shadow-[0_16px_40px_rgba(0,0,0,0.5),0_0_0_1px_rgba(0,0,0,0.25)]">
+            <textarea
+              ref={textareaRef}
+              placeholder="Ask a question..."
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              onKeyDown={handleKeyDown}
+              disabled={!courseId || isPending}
+              className="flex-1 bg-transparent border-0 px-0 py-2 leading-6 text-white placeholder:text-gray-500 resize-none min-h-[40px] max-h-[120px] outline-none ring-0 focus:outline-none focus:ring-0 focus:bg-transparent focus-visible:outline-none focus-visible:ring-0 focus-visible:bg-transparent"
+              rows={1}
+            />
+            <Button
+              onClick={handleSend}
+              disabled={!String(message || "").trim() || isPending}
+              className="btn-gradient rounded-full h-9 w-9 p-0 shrink-0 mb-[3px]"
+            >
+              <ArrowUp className="w-4 h-4" />
+            </Button>
+          </div>
         </div>
       </div>
       </div>

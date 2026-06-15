@@ -71,9 +71,12 @@ from app.core.settings import Settings, get_settings
 from app.db.models.chat_conversation import ChatConversation
 from app.db.models.chat_message import ChatMessage
 from app.db.models.course import Course
+from app.db.models.video_asset import VideoAsset
 from app.db.session import get_db, get_session_maker
 from app.schemas.chat import ChatCitation, CourseChatRequest, CourseChatResponse
+from app.schemas.course_info import CourseInfo
 from app.schemas.retrieval import RetrievedDoc
+from app.schemas.viewing_context import ViewingContext
 from app.services.conversation_history import build_conversation_history
 from app.services.course_info import build_course_info_cached
 from app.schemas.conversation_history import ConversationHistory
@@ -134,6 +137,58 @@ def _build_thinking(
     return text or None
 
 
+async def _validated_video_asset_id(
+    *,
+    db: AsyncSession,
+    course_id: UUID,
+    watching_video_asset_id: UUID | None,
+) -> UUID | None:
+    """Return the watched asset id when it belongs to this course, else None.
+
+    Used to tag a newly created conversation with its lecture (so per-video
+    history can be listed later). Course-ownership is enforced — not
+    transcript-readiness: a conversation belongs to its lecture even before the
+    transcript is ingested. Readiness only gates retrieval (`ViewingContext`).
+    """
+    if watching_video_asset_id is None:
+        return None
+    res = await db.execute(
+        select(VideoAsset.id).where(
+            VideoAsset.id == watching_video_asset_id,
+            VideoAsset.course_id == course_id,
+        )
+    )
+    return res.scalar_one_or_none()
+
+
+def _resolve_viewing_context(
+    *,
+    course_info: CourseInfo,
+    watching_video_asset_id: UUID | None,
+    watching_timestamp_sec: float | None,
+) -> ViewingContext | None:
+    """Turn the player's `watching_*` request fields into a `ViewingContext`.
+
+    Graceful degrade — returns None (→ ordinary course chat) when no asset was
+    sent, the asset isn't part of this course, or its transcript isn't ingested
+    yet (the readiness check lives in `ViewingContext.from_lecture`). Never
+    raises: a stale/invalid watched id quietly disables video mode rather than
+    failing the turn.
+    """
+    if watching_video_asset_id is None:
+        return None
+    lecture = course_info.lecture_by_id(watching_video_asset_id)
+    if lecture is None:
+        return None
+    return ViewingContext.from_lecture(lecture, timestamp_sec=watching_timestamp_sec)
+
+
+# Inline transcript markers like "[0:00] " / "[1:02:15] " that the retriever
+# renders into doc text (to help the model cite). They're for the model, not the
+# reader — stripped from the user-facing citation snippet.
+_TS_MARKER_RE = re.compile(r"\[\d{1,3}:\d{2}(?::\d{2})?\]\s*")
+
+
 def _docs_to_citations(docs: list[RetrievedDoc]) -> list[ChatCitation]:
     """Map retrieved docs into the `ChatCitation` shape the frontend already renders.
 
@@ -155,7 +210,7 @@ def _docs_to_citations(docs: list[RetrievedDoc]) -> list[ChatCitation]:
         if d.chapter_title:
             extra["chapterTitle"] = d.chapter_title
 
-        snippet = (d.text or "").strip()
+        snippet = _TS_MARKER_RE.sub("", d.text or "").strip()
         if len(snippet) > 240:
             snippet = snippet[:240].rstrip() + "…"
 
@@ -284,7 +339,14 @@ async def course_chat_v2(
             )
 
     if conversation is None:
-        conversation = ChatConversation(course_id=course.id, title=None)
+        # Tag the conversation with the watched lecture when started from the
+        # video player, so it can be listed per-video later (NULL = course chat).
+        new_video_asset_id = await _validated_video_asset_id(
+            db=db, course_id=course.id, watching_video_asset_id=body.watching_video_asset_id
+        )
+        conversation = ChatConversation(
+            course_id=course.id, title=None, video_asset_id=new_video_asset_id
+        )
         db.add(conversation)
         await db.flush()  # surface conversation.id
         created_new_conversation = True
@@ -324,11 +386,17 @@ async def course_chat_v2(
         SessionLocal = get_session_maker()
         async with SessionLocal() as ta_db:
             course_info = await build_course_info_cached(db=ta_db, course=course)
+            viewing = _resolve_viewing_context(
+                course_info=course_info,
+                watching_video_asset_id=body.watching_video_asset_id,
+                watching_timestamp_sec=body.watching_timestamp_sec,
+            )
             result = await ta.aforward(
                 db=ta_db,
                 course_info=course_info,
                 conversation_history=history,
                 user_query=body.message,
+                viewing=viewing,
             )
         answer_text = result.answer or _LLM_ERROR_FALLBACK
         route = result.route
@@ -513,7 +581,13 @@ async def course_chat_v2_stream(
             )
 
     if conversation is None:
-        conversation = ChatConversation(course_id=course.id, title=None)
+        # Tag with the watched lecture (NULL = course chat); see non-streaming.
+        new_video_asset_id = await _validated_video_asset_id(
+            db=db, course_id=course.id, watching_video_asset_id=body.watching_video_asset_id
+        )
+        conversation = ChatConversation(
+            course_id=course.id, title=None, video_asset_id=new_video_asset_id
+        )
         db.add(conversation)
         await db.flush()
         created_new_conversation = True
@@ -538,6 +612,8 @@ async def course_chat_v2_stream(
     captured_conversation_id: UUID = conversation.id
     captured_history: ConversationHistory = history
     user_query: str = body.message
+    captured_watching_asset_id: UUID | None = body.watching_video_asset_id
+    captured_watching_timestamp_sec: float | None = body.watching_timestamp_sec
 
     async def _gen() -> AsyncIterator[str]:
         SessionLocal = get_session_maker()
@@ -550,11 +626,17 @@ async def course_chat_v2_stream(
                 res = await ta_db.execute(select(Course).where(Course.id == captured_course_id))
                 gen_course = res.scalar_one()  # ownership already verified above
                 course_info = await build_course_info_cached(db=ta_db, course=gen_course)
+                viewing = _resolve_viewing_context(
+                    course_info=course_info,
+                    watching_video_asset_id=captured_watching_asset_id,
+                    watching_timestamp_sec=captured_watching_timestamp_sec,
+                )
                 async for ev in ta.astream(
                     db=ta_db,
                     course_info=course_info,
                     conversation_history=captured_history,
                     user_query=user_query,
+                    viewing=viewing,
                 ):
                     if isinstance(ev, CitationsEvent):
                         # Enrich on a fresh session, then emit BEFORE answer

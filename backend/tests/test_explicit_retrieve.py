@@ -19,7 +19,7 @@ from app.db.models.transcript_segment import TranscriptSegment
 from app.db.models.user import User
 from app.db.models.video_asset import VideoAsset
 from app.db.models.video_chapter import VideoChapter
-from app.rag.explicit_retrieve import retrieve_explicitly
+from app.rag.explicit_retrieve import retrieve_explicitly, retrieve_recent_window
 from app.services.course_info import build_course_info
 
 
@@ -474,5 +474,153 @@ async def test_retrieve_explicitly_source_label_and_prompt_string() -> None:
             indexed = doc.to_prompt_string(index=3)
             assert indexed.startswith("[3] [Source: "), indexed
             assert "[0:10] hello students" in indexed
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_retrieve_recent_window_returns_trailing_segments_up_to_head() -> None:
+    settings = get_settings()
+    if not await _can_connect(settings.database_url):
+        pytest.skip("Database not reachable.")
+
+    await asyncio.to_thread(_run_migrations_sync)
+
+    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+    SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with SessionLocal() as session:
+            _, course = await _create_user_and_course(session)
+            content, asset = await _create_lecture(session, course=course, title="Lecture A")
+
+            session.add(
+                VideoChapter(
+                    video_asset_id=asset.id,
+                    language_code="en",
+                    chapter_index=0,
+                    start_sec=0.0,
+                    end_sec=600.0,
+                    title="Intro Chapter",
+                    description=None,
+                )
+            )
+            session.add_all(
+                [
+                    TranscriptSegment(
+                        course_id=course.id,
+                        video_asset_id=asset.id,
+                        start_sec=0.0,
+                        end_sec=30.0,
+                        text="way before the window",
+                        language_code="en",
+                    ),
+                    TranscriptSegment(
+                        course_id=course.id,
+                        video_asset_id=asset.id,
+                        start_sec=200.0,
+                        end_sec=230.0,
+                        text="just before now",
+                        language_code="en",
+                    ),
+                    TranscriptSegment(
+                        course_id=course.id,
+                        video_asset_id=asset.id,
+                        start_sec=230.0,
+                        end_sec=260.0,
+                        text="moments ago",
+                        language_code="en",
+                    ),
+                    TranscriptSegment(
+                        course_id=course.id,
+                        video_asset_id=asset.id,
+                        start_sec=400.0,
+                        end_sec=430.0,
+                        text="not yet watched",
+                        language_code="en",
+                    ),
+                ]
+            )
+            await session.commit()
+
+            info = await build_course_info(db=session, course=course)
+
+            # Watching at 4:20 (260s), lookback 120s -> window [140, 260].
+            docs = await retrieve_recent_window(
+                db=session,
+                course_info=info,
+                lecture_slug="L1",
+                head_sec=260.0,
+                lookback_sec=120.0,
+            )
+            assert len(docs) == 1
+            doc = docs[0]
+            assert doc.lecture_id == asset.id
+            assert doc.content_id == content.id
+            assert doc.chapter_title == "Intro Chapter"  # chapter at head
+            assert "just before now" in doc.text
+            assert "moments ago" in doc.text
+            assert "way before the window" not in doc.text  # outside lookback
+            assert "not yet watched" not in doc.text  # after the head
+            assert doc.start_sec == pytest.approx(200.0)
+            assert doc.end_sec == pytest.approx(260.0)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_retrieve_recent_window_empty_cases() -> None:
+    settings = get_settings()
+    if not await _can_connect(settings.database_url):
+        pytest.skip("Database not reachable.")
+
+    await asyncio.to_thread(_run_migrations_sync)
+
+    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+    SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with SessionLocal() as session:
+            _, course = await _create_user_and_course(session)
+            _, asset = await _create_lecture(session, course=course, title="Lecture A")
+            _, pending = await _create_lecture(
+                session, course=course, title="Pending", transcript_ready=False
+            )
+
+            session.add(
+                TranscriptSegment(
+                    course_id=course.id,
+                    video_asset_id=asset.id,
+                    start_sec=100.0,
+                    end_sec=130.0,
+                    text="some content",
+                    language_code="en",
+                )
+            )
+            await session.commit()
+
+            info = await build_course_info(db=session, course=course)
+
+            async def call(slug, head, lookback=120.0):
+                return await retrieve_recent_window(
+                    db=session,
+                    course_info=info,
+                    lecture_slug=slug,
+                    head_sec=head,
+                    lookback_sec=lookback,
+                )
+
+            # No playback head -> empty (soft-scope still applies elsewhere).
+            assert await call("L1", None) == []
+            # Negative head -> empty.
+            assert await call("L1", -5.0) == []
+            # head at 0 -> empty window -> empty.
+            assert await call("L1", 0.0) == []
+            # Unknown / malformed slug -> empty.
+            assert await call("L99", 120.0) == []
+            assert await call("garbage", 120.0) == []
+            # Not-ready lecture (L2) -> empty even though it exists.
+            assert info.lecture_by_slug("L2").id == pending.id
+            assert await call("L2", 120.0) == []
+            # No segments in the trailing window -> empty.
+            assert await call("L1", 1000.0, 60.0) == []
     finally:
         await engine.dispose()

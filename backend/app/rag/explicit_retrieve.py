@@ -215,3 +215,72 @@ async def retrieve_explicitly(
             end_sec=actual_end,
         )
     ]
+
+
+async def retrieve_recent_window(
+    *,
+    db: AsyncSession,
+    course_info: CourseInfo,
+    lecture_slug: str | None,
+    head_sec: float | None,
+    lookback_sec: float = 120.0,
+) -> list[RetrievedDoc]:
+    """Retrieve the transcript the student has *just* watched, as a citable doc.
+
+    Unlike `retrieve_explicitly` (a window *centered* on a user-referenced
+    timestamp), this loads the trailing window `[head_sec - lookback_sec,
+    head_sec]` ending at the current playback head. It exists to anchor deictic
+    questions — "what did he just say?", "explain that" — with the on-screen
+    context, independent of (and additive to) whatever the main RAG cascade
+    retrieves.
+
+    The returned `RetrievedDoc` is timestamp-tagged like any other, so it flows
+    through citation enrichment and becomes a deep-link to the moment. Chapter
+    attribution uses the chapter containing `head_sec` (the chapter the student
+    is currently in), even if the window dips into the previous one.
+
+    Returns an empty list when there's nothing useful to anchor to: no playback
+    position, an unknown/not-ready lecture, or no transcript in the window. The
+    caller treats the recent window as optional and proceeds without it.
+    """
+    if head_sec is None or head_sec < 0:
+        return []
+
+    slug = _normalize_slug(lecture_slug)
+    if slug is None:
+        return []
+
+    lecture: Lecture | None = course_info.lecture_by_slug(slug)
+    if lecture is None or not lecture.transcript_ready:
+        return []
+
+    window_start = max(0.0, float(head_sec) - max(0.0, float(lookback_sec)))
+    window_end = float(head_sec)
+    if window_end <= window_start:
+        return []
+
+    segments = await _load_segments_in_range(
+        db=db,
+        video_asset_id=lecture.id,
+        start_sec=window_start,
+        end_sec=window_end,
+    )
+    body = _render_segments(segments)
+    if not body:
+        return []
+
+    chapter = await _find_chapter_at(db=db, video_asset_id=lecture.id, ts=window_end)
+
+    return [
+        RetrievedDoc(
+            text=body,
+            lecture_id=lecture.id,
+            lecture_slug=lecture.slug,
+            lecture_title=lecture.title,
+            content_id=lecture.content_id,
+            chapter_id=chapter.id if chapter is not None else None,
+            chapter_title=chapter.title if chapter is not None else None,
+            start_sec=float(segments[0].start_sec),
+            end_sec=float(segments[-1].end_sec),
+        )
+    ]

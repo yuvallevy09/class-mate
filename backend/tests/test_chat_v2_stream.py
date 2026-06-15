@@ -95,7 +95,7 @@ class _FakeTA:
     def __init__(self, events: list):
         self._events = events
 
-    async def astream(self, *, db, course_info, conversation_history, user_query):  # noqa: ARG002
+    async def astream(self, *, db, course_info, conversation_history, user_query, viewing=None):  # noqa: ARG002
         for ev in self._events:
             if isinstance(ev, Exception):
                 raise ev

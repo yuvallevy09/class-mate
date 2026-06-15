@@ -10,7 +10,14 @@ import { normalizeCitationMarkers } from "@/components/chat/citations";
  * the typewriter reveal caught up, so React Query refetches can't snap the
  * streamed message to full text mid-reveal.
  */
-export function useAssistantTurn({ courseId, conversationId, onBeforeSend, onPersisted, onError }) {
+export function useAssistantTurn({
+  courseId,
+  conversationId,
+  getViewing,
+  onBeforeSend,
+  onPersisted,
+  onError,
+}) {
   const [turn, setTurn] = useState(null);
   const handleRef = useRef(null);
   const startedAtRef = useRef(0);
@@ -18,7 +25,7 @@ export function useAssistantTurn({ courseId, conversationId, onBeforeSend, onPer
   const revealDoneRef = useRef(false);
 
   const cbRef = useRef({});
-  cbRef.current = { onBeforeSend, onPersisted, onError };
+  cbRef.current = { onBeforeSend, onPersisted, onError, getViewing };
 
   useEffect(() => () => handleRef.current?.cancel(), []);
 
@@ -55,9 +62,13 @@ export function useAssistantTurn({ courseId, conversationId, onBeforeSend, onPer
         thoughtForSecs: null,
       });
 
+      // Read viewing context at send time so the timestamp reflects the live
+      // playback head (video chat); null/undefined for course chat.
+      const viewing = cbRef.current.getViewing?.() ?? null;
+
       handleRef.current?.cancel();
       handleRef.current = startChatTurn(
-        { courseId, message: text, conversationId },
+        { courseId, message: text, conversationId, viewing },
         {
           onStatus: ({ stage, label }) =>
             setTurn((prev) =>
@@ -123,11 +134,20 @@ export function useAssistantTurn({ courseId, conversationId, onBeforeSend, onPer
 
   const clearTurn = useCallback(() => setTurn(null), []);
 
+  // Abort any in-flight stream AND drop the live turn. Use when the turn should
+  // be discarded outright (e.g. navigating away / switching context), so the
+  // adapter's onDone/onPersisted can't fire after the fact.
+  const cancel = useCallback(() => {
+    handleRef.current?.cancel();
+    setTurn(null);
+  }, []);
+
   return {
     turn,
     sendMessage,
     notifyRevealComplete,
     clearTurn,
+    cancel,
     isPending: !!turn && turn.phase !== "done",
   };
 }

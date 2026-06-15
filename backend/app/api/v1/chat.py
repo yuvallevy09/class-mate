@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -684,13 +684,18 @@ async def list_conversations(
     course_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    video_asset_id: UUID | None = Query(
+        default=None,
+        description="When set, return only conversations anchored to this lecture "
+        "(the video-chat widget's per-video history). Omit for all conversations.",
+    ),
 ) -> list[ChatConversation]:
     await _ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
-    res = await db.execute(
-        select(ChatConversation)
-        .where(ChatConversation.course_id == course_id)
-        .order_by(ChatConversation.last_message_at.desc())
-    )
+    stmt = select(ChatConversation).where(ChatConversation.course_id == course_id)
+    if video_asset_id is not None:
+        stmt = stmt.where(ChatConversation.video_asset_id == video_asset_id)
+    stmt = stmt.order_by(ChatConversation.last_message_at.desc())
+    res = await db.execute(stmt)
     return list(res.scalars().all())
 
 

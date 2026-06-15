@@ -10,7 +10,14 @@ import CitationPopover from "./CitationPopover";
  * Click/tap toggles. `coordinator` is a shared mutable ref-object per message
  * ensuring only one popover is open at a time.
  */
-export default function CitationPill({ indices = [], citationModel, coordinator, popIn }) {
+export default function CitationPill({
+  indices = [],
+  citationModel,
+  coordinator,
+  popIn,
+  onSeek,
+  currentContentId,
+}) {
   const [open, setOpen] = useState(false);
   const pillRef = useRef(null);
   const openTimer = useRef(null);
@@ -96,7 +103,7 @@ export default function CitationPill({ indices = [], citationModel, coordinator,
           }}
           className="w-[330px] max-w-[calc(100vw-24px)] rounded-2xl border-white/[0.13] bg-[#16151C]/90 p-4 text-left shadow-[0_16px_40px_rgba(0,0,0,0.55),0_0_32px_rgba(139,92,246,0.07)] backdrop-blur-xl"
         >
-          <CitationPopover models={models} />
+          <CitationPopover models={models} onSeek={onSeek} currentContentId={currentContentId} />
         </PopoverContent>
       ) : null}
     </Popover>

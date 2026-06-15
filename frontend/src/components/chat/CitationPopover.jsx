@@ -19,9 +19,16 @@ function Chip({ href, children }) {
   );
 }
 
-function SourceBody({ model }) {
+function SourceBody({ model, onSeek, currentContentId }) {
   const isVideo = model.kind === "video";
   const showChapter = isVideo && !isRedundantChapterTitle(model.chapterTitle);
+  // On the video player page, timestamps for the lecture currently on screen
+  // seek in place instead of opening a new tab.
+  const seekable =
+    isVideo &&
+    typeof onSeek === "function" &&
+    model.contentId &&
+    String(model.contentId) === String(currentContentId || "");
 
   return (
     <div>
@@ -55,12 +62,29 @@ function SourceBody({ model }) {
 
       <div className="flex flex-wrap gap-1.5">
         {isVideo ? (
-          (model.ranges || []).map((r) => (
-            <Chip key={`${r.s}-${r.e}`} href={r.url}>
-              <Play className="h-2.5 w-2.5 fill-current" />
-              {r.e !== r.s ? `${fmtTimestamp(r.s)}–${fmtTimestamp(r.e)}` : fmtTimestamp(r.s)}
-            </Chip>
-          ))
+          (model.ranges || []).map((r) => {
+            const label =
+              r.e !== r.s ? `${fmtTimestamp(r.s)}–${fmtTimestamp(r.e)}` : fmtTimestamp(r.s);
+            if (seekable) {
+              return (
+                <button
+                  key={`${r.s}-${r.e}`}
+                  type="button"
+                  className={chipClass}
+                  onClick={() => onSeek(r.s)}
+                >
+                  <Play className="h-2.5 w-2.5 fill-current" />
+                  {label}
+                </button>
+              );
+            }
+            return (
+              <Chip key={`${r.s}-${r.e}`} href={r.url}>
+                <Play className="h-2.5 w-2.5 fill-current" />
+                {label}
+              </Chip>
+            );
+          })
         ) : model.url ? (
           <Chip href={model.url}>
             <ExternalLink className="h-2.5 w-2.5" />
@@ -73,7 +97,7 @@ function SourceBody({ model }) {
 }
 
 /** Popover body; pages through `models` when a chip covers several sources. */
-export default function CitationPopover({ models = [] }) {
+export default function CitationPopover({ models = [], onSeek, currentContentId }) {
   const [page, setPage] = useState(0);
   useEffect(() => {
     setPage(0);
@@ -113,7 +137,7 @@ export default function CitationPopover({ models = [] }) {
           </span>
         </div>
       )}
-      <SourceBody model={model} />
+      <SourceBody model={model} onSeek={onSeek} currentContentId={currentContentId} />
     </div>
   );
 }
