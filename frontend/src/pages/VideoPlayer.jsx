@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -18,6 +18,7 @@ import {
 import { createPageUrl } from "@/utils";
 import { getCourseContent, getDownloadUrl } from "@/api/courseContents";
 import { getVideoAssetSummary, listVideoAssets, listVideoAssetSegments } from "@/api/videoAssets";
+import { listConversationMessages } from "@/api/chat";
 import { useAssistantTurn } from "@/hooks/useAssistantTurn";
 
 import Navbar from "@/components/Navbar";
@@ -25,6 +26,7 @@ import CourseSidebar from "@/components/CourseSidebar";
 import AssistantMessage from "@/components/chat/AssistantMessage";
 import ThinkingDisclosure from "@/components/chat/ThinkingDisclosure";
 import UserMessage from "@/components/chat/UserMessage";
+import VideoConversationSwitcher from "@/components/chat/VideoConversationSwitcher";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -137,10 +139,13 @@ export default function VideoPlayer() {
 
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([]);
-  // Reset on every page entry / video switch — v1 starts a fresh conversation
-  // each visit (no resume yet); captured from the first turn's response and
-  // reused for the rest of the visit so the thread stays coherent.
+  // Captured from the first turn's response and reused for the rest of the
+  // visit (or set when loading a past conversation via the history switcher).
+  // Reset to null on page entry / video switch.
   const [conversationId, setConversationId] = useState(null);
+  const [isLoadingConversation, setIsLoadingConversation] = useState(false);
+
+  const queryClient = useQueryClient();
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isChatPopoutOpen, setIsChatPopoutOpen] = useState(false);
@@ -222,9 +227,15 @@ export default function VideoPlayer() {
 
   const handlePersisted = (info) => {
     const cid = (typeof info?.conversationId === "string" && info.conversationId) || null;
-    if (cid) setConversationId(cid);
+    if (cid) {
+      setConversationId(cid);
+      // A brand-new thread should show up in the history switcher next open.
+      queryClient.invalidateQueries({
+        queryKey: ["videoConversations", courseId, videoAssetId],
+      });
+    }
     // Commit the backend's link-formatted text verbatim (it carries the
-    // `#cm-src-N` anchors VideoChatSources renders); do NOT use the hook's
+    // `#cm-src-N` anchors the citation renderer handles); do NOT use the hook's
     // pill-normalized answer here — that's the course-chat citation format.
     const content = (typeof info?.fullText === "string" && info.fullText) || "";
     const citations = Array.isArray(info?.citations) ? info.citations : [];
@@ -259,6 +270,50 @@ export default function VideoPlayer() {
     cancel();
     setIsSummaryExpanded(false);
   }, [courseId, contentId, cancel]);
+
+  // History switcher: load a past conversation for this lecture into the chat.
+  const handleSelectConversation = async (cid) => {
+    if (!cid || String(cid) === String(conversationId)) return;
+    cancel(); // abort any in-flight turn so its onPersisted can't append here
+    clearTurn();
+    setMessage("");
+    setIsLoadingConversation(true);
+    try {
+      const rows = await queryClient.fetchQuery({
+        queryKey: ["conversationMessages", String(cid)],
+        queryFn: () => listConversationMessages(cid),
+      });
+      const mapped = (Array.isArray(rows) ? rows : []).map((m) => ({
+        role: m.role,
+        content: m.content,
+        citations: Array.isArray(m.citations) ? m.citations : [],
+        thinking: m.thinking ?? null,
+      }));
+      setMessages(mapped);
+      setConversationId(String(cid));
+    } catch (err) {
+      setMessages([
+        {
+          role: "assistant",
+          content: `Sorry, I couldn't load that conversation. ${
+            err?.data?.detail || err?.message || ""
+          }`,
+          citations: [],
+        },
+      ]);
+    } finally {
+      setIsLoadingConversation(false);
+    }
+  };
+
+  // History switcher: clear to a fresh thread for this lecture.
+  const handleNewConversation = () => {
+    cancel();
+    clearTurn();
+    setMessage("");
+    setMessages([]);
+    setConversationId(null);
+  };
 
   const seekToSeconds = (seconds) => {
     const el = videoRef.current;
@@ -496,6 +551,13 @@ export default function VideoPlayer() {
           <h2 className="text-lg font-semibold">Chat</h2>
         </div>
         <div className="flex items-center gap-1">
+          <VideoConversationSwitcher
+            courseId={courseId}
+            videoAssetId={videoAssetId}
+            activeConversationId={conversationId}
+            onSelect={handleSelectConversation}
+            onNew={handleNewConversation}
+          />
           {isPopout ? (
             <Button
               variant="ghost"
@@ -533,7 +595,12 @@ export default function VideoPlayer() {
 
       <div ref={chatScrollRef} className={`${scrollHeightClass} overflow-y-auto px-4 pt-4 pb-24`}>
         <div className="space-y-4">
-          {messages.length === 0 && !turn && (
+          {isLoadingConversation && (
+            <div className="text-center py-8">
+              <Loader2 className="w-8 h-8 text-purple-400 mx-auto animate-spin" />
+            </div>
+          )}
+          {!isLoadingConversation && messages.length === 0 && !turn && (
             <div className="text-center py-8">
               <Sparkles className="w-10 h-10 text-purple-400 mx-auto mb-2" />
               <p className="text-gray-400 text-sm">Ask questions about the lecture</p>

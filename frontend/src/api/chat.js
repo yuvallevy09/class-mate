@@ -1,8 +1,9 @@
 import { request } from "./http";
 
-export async function listCourseConversations(courseId) {
+export async function listCourseConversations(courseId, { videoAssetId } = {}) {
   if (!courseId) throw new Error("courseId is required");
-  return request(`/api/v1/courses/${encodeURIComponent(courseId)}/conversations`, { method: "GET" });
+  const qs = videoAssetId ? `?video_asset_id=${encodeURIComponent(videoAssetId)}` : "";
+  return request(`/api/v1/courses/${encodeURIComponent(courseId)}/conversations${qs}`, { method: "GET" });
 }
 
 export async function listConversationMessages(conversationId) {

@@ -161,13 +161,14 @@ async def test_video_chat_tags_conversation_and_list_filters(monkeypatch) -> Non
             assert r3.status_code == 200
             foreign_convo_id = r3.json()["conversationId"]
 
-            # Unfiltered list: all three conversations present.
-            all_convos = (await c.get(f"/api/v1/courses/{course_id}/conversations")).json()
-            by_id = {cv["id"]: cv for cv in all_convos}
-            assert set(by_id) == {video_convo_id, course_convo_id, foreign_convo_id}
-            assert by_id[video_convo_id]["video_asset_id"] == str(asset_id)
-            assert by_id[course_convo_id]["video_asset_id"] is None
-            assert by_id[foreign_convo_id]["video_asset_id"] is None  # graceful degrade
+            # Bare list = course-level conversations only; the video-tagged thread
+            # is excluded (it lives on its lecture page). The off-course asset
+            # degraded to untagged, so it counts as course-level.
+            course_level = (await c.get(f"/api/v1/courses/{course_id}/conversations")).json()
+            ids = {cv["id"] for cv in course_level}
+            assert video_convo_id not in ids
+            assert ids == {course_convo_id, foreign_convo_id}
+            assert all(cv["video_asset_id"] is None for cv in course_level)
 
             # Filtered list: only the tagged conversation for this lecture.
             filtered = (

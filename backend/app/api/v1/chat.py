@@ -687,13 +687,20 @@ async def list_conversations(
     video_asset_id: UUID | None = Query(
         default=None,
         description="When set, return only conversations anchored to this lecture "
-        "(the video-chat widget's per-video history). Omit for all conversations.",
+        "(the video-chat widget's per-video history). When omitted, returns only "
+        "course-level conversations (the course chat) — per-lecture threads are "
+        "excluded and live on their video page.",
     ),
 ) -> list[ChatConversation]:
     await _ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
     stmt = select(ChatConversation).where(ChatConversation.course_id == course_id)
     if video_asset_id is not None:
         stmt = stmt.where(ChatConversation.video_asset_id == video_asset_id)
+    else:
+        # Course chat and video chat are distinct spaces: the bare list is the
+        # course-level history only (video-tagged threads live on their lecture
+        # page, fetched with ?video_asset_id=).
+        stmt = stmt.where(ChatConversation.video_asset_id.is_(None))
     stmt = stmt.order_by(ChatConversation.last_message_at.desc())
     res = await db.execute(stmt)
     return list(res.scalars().all())
