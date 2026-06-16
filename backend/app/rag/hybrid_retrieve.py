@@ -258,7 +258,15 @@ async def _semantic_top_k(
     cats = [str(c).strip() for c in (categories or []) if str(c).strip()]
     asset_ids = [str(a) for a in (video_asset_ids or [])]
 
-    sql = """
+    # Inline the query vector as a SQL literal rather than binding it as a
+    # parameter. Passing it as a bound `:qvec::vector` cast under asyncpg's
+    # extended/prepared protocol crashes the Postgres backend on the HNSW index
+    # scan ("ResourceOwnerEnlarge called after release started"); inlining the
+    # literal avoids that path. `_vector_literal` emits only digits, `.`, `-`,
+    # `e`, `+`, `,`, `[`, `]` — no quotes or SQL metacharacters — so embedding it
+    # inside a single-quoted `'…'::vector` literal is injection-safe.
+    dist = f"(embedding <=> '{qlit}'::vector)"
+    sql = f"""
     SELECT
       id,
       content_id,
@@ -272,7 +280,7 @@ async def _semantic_top_k(
       text,
       metadata,
       created_at,
-      (embedding <=> :qvec::vector) AS distance
+      {dist} AS distance
     FROM content_chunks
     WHERE course_id = :course_id
       AND embedding IS NOT NULL
@@ -283,9 +291,9 @@ async def _semantic_top_k(
     # computed within the requested lectures, not post-filtered out of a global k.
     if asset_ids:
         sql += " AND video_asset_id = ANY(CAST(:asset_ids AS uuid[]))\n"
-    sql += " ORDER BY (embedding <=> :qvec::vector) ASC, created_at DESC LIMIT :k"
+    sql += f" ORDER BY {dist} ASC, created_at DESC LIMIT :k"
 
-    params: dict[str, Any] = {"course_id": str(course_id), "qvec": qlit, "k": k}
+    params: dict[str, Any] = {"course_id": str(course_id), "k": k}
     if cats:
         params["cats"] = cats
     if asset_ids:
@@ -368,6 +376,16 @@ async def retrieve_course_hybrid_hits(
             str(e),
             str(course_id),
         )
+        # A failed semantic query can leave the transaction aborted; roll back so
+        # the subsequent lexical-only return / neighbor expansion runs on a clean
+        # session instead of failing with InFailedSQLTransactionError. The
+        # retrieval session is read-only, so this discards nothing meaningful, and
+        # `lexical` is already materialized. Guard the rollback itself so a dead
+        # connection can't mask the original error.
+        try:
+            await db.rollback()
+        except Exception:
+            pass
         semantic = []
 
     # If semantic is unavailable, keep existing behavior (BM25 only), but still expand neighbors.

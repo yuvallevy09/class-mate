@@ -138,21 +138,26 @@ async def rag_query(
     if k <= 0:
         return RagQueryResponse(hits=[])
 
-    sql = """
+    # Inline the query vector as a SQL literal, not a bound `:qvec::vector` param:
+    # the parameterized cast crashes the Postgres backend on the HNSW scan under
+    # asyncpg's extended protocol (see app/rag/hybrid_retrieve.py). `qlit` is only
+    # digits/`.`/`-`/`e`/`+`/`,`/`[`/`]`, so inlining it is injection-safe.
+    dist = f"(embedding <=> '{qlit}'::vector)"
+    sql = f"""
     SELECT
       content_id,
       text,
       metadata,
-      (embedding <=> :qvec::vector) AS distance
+      {dist} AS distance
     FROM content_chunks
     WHERE course_id = :course_id
       AND embedding IS NOT NULL
     """
-    params: dict = {"course_id": str(course_id), "qvec": qlit, "k": k}
+    params: dict = {"course_id": str(course_id), "k": k}
     if doc_type and doc_type.strip():
         sql += " AND (metadata->>'doc_type') = :doc_type\n"
         params["doc_type"] = doc_type.strip()
-    sql += " ORDER BY (embedding <=> :qvec::vector) ASC LIMIT :k"
+    sql += f" ORDER BY {dist} ASC LIMIT :k"
 
     res = await db.execute(sa_text(sql), params)
     rows = res.mappings().all()
