@@ -34,20 +34,23 @@ LECTURE_SUMMARY = "lecture_summary"
 
 # --- Tier assignment per role (the mapping decision lives here) ---
 #
-# flash  = internal/high-volume only, never user-facing text
-# haiku  = user-facing prose without citations + background structured work
+# flash  = optional cheapest tier (Gemini). Currently unused — router/title were
+#          moved to haiku to keep the pipeline on a single provider (Anthropic)
+#          and avoid Gemini billing. Re-point a role here to use Flash again.
+# haiku  = high-volume internal steps (router/title) + user-facing prose without
+#          citations + background structured work
 # sonnet = the two correctness gates (retrieval-in, answer-out) + the
 #          per-lecture summary that feeds retrieval context
 #
 # To re-tier a step (e.g. move gen_retrieval_params to haiku once a retrieval
 # eval confirms quality holds), change a single entry below.
 ROLE_TIERS: dict[str, str] = {
-    ROUTER: "flash",
+    ROUTER: "haiku",
     CLARIFY: "haiku",
     ANSWER_NO_CTX: "haiku",
     GEN_RETRIEVAL: "sonnet",
     ANSWER_WITH_CTX: "sonnet",
-    TITLE: "flash",
+    TITLE: "haiku",
     CHAPTERS: "haiku",
     COURSE_SUMMARY: "haiku",
     LECTURE_SUMMARY: "sonnet",
