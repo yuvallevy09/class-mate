@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import CitationPopover from "./CitationPopover";
+import { mergeRanges } from "./citations";
 
 /**
  * Inline citation chip: "Lect 5: Backprop… +1" with a hover/tap popover.
@@ -23,17 +24,26 @@ export default function CitationPill({
   const openTimer = useRef(null);
   const closeTimer = useRef(null);
 
-  // Distinct sources for this chip (same-group indices dedupe to one entry).
+  // One popover model per distinct lecture/source cited at THIS spot. Video
+  // models collect only the ranges of this pill's own indices (the moments
+  // actually cited here, not the whole lecture's retrieved set), then merge any
+  // that overlap or sit within a few seconds of each other into one chip.
   const models = useMemo(() => {
-    const seen = new Set();
-    const out = [];
+    const byGroup = new Map();
     for (const i of indices) {
       const m = citationModel?.byIndex?.get(i);
-      if (!m || seen.has(m.groupKey)) continue;
-      seen.add(m.groupKey);
-      out.push(m);
+      if (!m) continue;
+      let entry = byGroup.get(m.groupKey);
+      if (!entry) {
+        entry = { ...m, ranges: [] };
+        delete entry.range;
+        byGroup.set(m.groupKey, entry);
+      }
+      if (m.range) entry.ranges.push(m.range);
     }
-    return out;
+    return Array.from(byGroup.values()).map((m) =>
+      m.kind === "video" ? { ...m, ranges: mergeRanges(m.ranges) } : m
+    );
   }, [indices, citationModel]);
 
   useEffect(

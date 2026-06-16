@@ -41,6 +41,37 @@ export function isRedundantChapterTitle(t) {
   return s.toLowerCase() === "full lecture";
 }
 
+// Ranges within this many seconds of each other are fused into one chip, so a
+// pill doesn't show near-duplicate moments (overlapping or a tiny gap apart).
+export const RANGE_MERGE_GAP_SEC = 10;
+
+/**
+ * Merge a list of `{ s, e, url, chapterTitle }` time ranges, fusing any that
+ * overlap or sit within `gap` seconds of each other into a single span.
+ *
+ * Sorted by start time, so the result is chronological. A fused range keeps the
+ * earliest-start range's `url` (the merged chip still deep-links to the start of
+ * the moment) and the first non-empty `chapterTitle`. Inputs are cloned — the
+ * per-citation range objects in the (memoized) display model are never mutated.
+ */
+export function mergeRanges(ranges = [], gap = RANGE_MERGE_GAP_SEC) {
+  const sorted = (Array.isArray(ranges) ? ranges : [])
+    .filter(Boolean)
+    .slice()
+    .sort((a, b) => a.s - b.s || a.e - b.e);
+  const out = [];
+  for (const r of sorted) {
+    const last = out[out.length - 1];
+    if (last && r.s <= last.e + gap) {
+      if (r.e > last.e) last.e = r.e;
+      if (!last.chapterTitle && r.chapterTitle) last.chapterTitle = r.chapterTitle;
+    } else {
+      out.push({ ...r });
+    }
+  }
+  return out;
+}
+
 /** Chip label: "Lect 5: Backpropagation…" from the lectureSlug + title. */
 function getChipLabel(extra, title) {
   const slug = String(extra?.lectureSlug || "").trim();
@@ -60,57 +91,36 @@ function getPageLabel(extra) {
 
 /**
  * Builds the per-index display model for citation pills/popovers.
- * Video citations are grouped by content_id: every index of the same video
- * shares the group's displayNumber (its leader index) and full range list,
- * while keeping its own snippet/chapter for the popover.
+ * Video citations are grouped by content_id ONLY to share a stable
+ * displayNumber (the leader index) + title; each index keeps its OWN single
+ * `range` (its cited moment) plus snippet/chapter. The pill aggregates the
+ * ranges of just the citations at its spot, so it never shows the whole
+ * lecture's retrieved set.
  *
  * Returns { byIndex: Map<number, model> } where model is:
- *   { kind: "video", displayNumber, groupKey, title, snippet, chapterTitle,
- *     ranges: [{ s, e, url, chapterTitle }] }
- *   { kind: "file", displayNumber, groupKey, title, snippet, pageLabel, url }
+ *   { kind: "video", displayNumber, groupKey, contentId, title, chipLabel,
+ *     snippet, chapterTitle, range: { s, e, url, chapterTitle } }
+ *   { kind: "file", displayNumber, groupKey, title, chipLabel, snippet,
+ *     pageLabel, url }
  */
 export function buildCitationModel(citations = []) {
   const items = Array.isArray(citations) ? citations : [];
   const videoGroups = new Map(); // contentId -> { leaderIndex, title, ranges: Map }
 
+  // Group video citations by content_id ONLY to assign a stable per-lecture
+  // display number + title. The actual time ranges live per-citation (each
+  // index keeps its OWN range below), so a pill shows only the moments cited at
+  // that spot — not every chunk retrieved from the lecture.
   items.forEach((c, idx) => {
     const i = idx + 1;
     if (!isVideoCitation(c)) return;
-
     const contentId = String(getCitationContentId(c));
-    const extra = c?.extra || {};
-    const start = Number(extra?.startSec || 0);
-    const end = Number(extra?.endSec || start);
-    const sInt = Math.max(0, Math.floor(start));
-    const eInt = Math.max(0, Math.floor(end));
-    const rngKey = `${sInt}-${eInt}`;
-
     if (!videoGroups.has(contentId)) {
-      videoGroups.set(contentId, {
-        contentId,
-        leaderIndex: i,
-        title: getCitationTitle(c),
-        ranges: new Map(),
-      });
+      videoGroups.set(contentId, { contentId, leaderIndex: i, title: getCitationTitle(c) });
     }
     const g = videoGroups.get(contentId);
     g.leaderIndex = Math.min(g.leaderIndex, i);
     if (!g.title) g.title = getCitationTitle(c);
-
-    if (!g.ranges.has(rngKey)) {
-      g.ranges.set(rngKey, {
-        s: sInt,
-        e: eInt,
-        url: typeof c?.url === "string" ? c.url : null,
-        chapterTitle:
-          (typeof extra?.chapterTitle === "string" && extra.chapterTitle.trim()) || null,
-      });
-    }
-    const r = g.ranges.get(rngKey);
-    if (!r.url && typeof c?.url === "string") r.url = c.url;
-    if (!r.chapterTitle && typeof extra?.chapterTitle === "string" && extra.chapterTitle.trim()) {
-      r.chapterTitle = extra.chapterTitle.trim();
-    }
   });
 
   const byIndex = new Map();
@@ -120,6 +130,10 @@ export function buildCitationModel(citations = []) {
     const snippet = typeof c?.snippet === "string" && c.snippet.trim() ? c.snippet.trim() : null;
     if (isVideoCitation(c)) {
       const g = videoGroups.get(String(getCitationContentId(c)));
+      const s = Math.max(0, Math.floor(Number(extra?.startSec || 0)));
+      const e = Math.max(0, Math.floor(Number(extra?.endSec || s)));
+      const chapterTitle =
+        (typeof extra?.chapterTitle === "string" && extra.chapterTitle.trim()) || null;
       byIndex.set(i, {
         kind: "video",
         displayNumber: g.leaderIndex,
@@ -128,9 +142,10 @@ export function buildCitationModel(citations = []) {
         title: g.title,
         chipLabel: getChipLabel(extra, g.title),
         snippet,
-        chapterTitle:
-          (typeof extra?.chapterTitle === "string" && extra.chapterTitle.trim()) || null,
-        ranges: Array.from(g.ranges.values()),
+        chapterTitle,
+        // This citation's OWN moment, not the whole lecture's range list. The
+        // pill aggregates the ranges of just the citations placed at its spot.
+        range: { s, e, url: typeof c?.url === "string" ? c.url : null, chapterTitle },
       });
     } else {
       const title = getCitationTitle(c);
@@ -190,10 +205,11 @@ export function normalizeCitationMarkers(content, citations = []) {
     (_m, markers, punct) => `${punct} ${markers.trim()}`
   );
 
-  // 4) Merge whitespace-adjacent markers into ONE multi-source marker
-  //    `[N](#cm-cite-N-M-…)`, deduping sources that resolve to the same
-  //    group (e.g. two ranges of the same video). Distinct sources page
-  //    inside the popover (the chip shows "+N").
+  // 4) Merge whitespace-adjacent markers into ONE marker
+  //    `[N](#cm-cite-N-M-…)`, deduping only EXACT-duplicate moments (same
+  //    lecture + same range). Distinct moments — even of the same lecture —
+  //    all survive: the pill shows one chip per cited moment, and separate
+  //    lectures page inside the popover (the chip shows "+N").
   const { byIndex } = buildCitationModel(citations);
   const markerRe = /\[\d{1,3}\]\(#cm-cite-([\d-]+)\)/g;
   let out = "";
@@ -219,7 +235,15 @@ export function normalizeCitationMarkers(content, citations = []) {
       run = { indices: [], keys: new Set() };
     }
     for (const i of idxs) {
-      const key = byIndex.get(i)?.groupKey ?? `i:${i}`;
+      const m = byIndex.get(i);
+      // Dedupe by the cited MOMENT (lecture + range), not just the lecture, so
+      // adjacent markers citing different moments of one lecture all survive
+      // (true duplicates still collapse). File citations key off their group.
+      const key = m
+        ? m.range
+          ? `${m.groupKey}@${m.range.s}-${m.range.e}`
+          : m.groupKey
+        : `i:${i}`;
       if (!run.keys.has(key)) {
         run.keys.add(key);
         run.indices.push(i);
