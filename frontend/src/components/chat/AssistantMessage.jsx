@@ -1,6 +1,10 @@
 import React, { useMemo, useRef } from "react";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import {
+  MARKDOWN_REMARK_PLUGINS,
+  MARKDOWN_REHYPE_PLUGINS,
+  normalizeDisplayMath,
+} from "@/lib/markdownMath";
 import { buildCitationModel, normalizeCitationMarkers } from "./citations";
 import { buildMarkdownComponents } from "./markdownComponents";
 import { useTypewriter } from "./useTypewriter";
@@ -22,7 +26,7 @@ export default function AssistantMessage({
 }) {
   const citationModel = useMemo(() => buildCitationModel(citations), [citations]);
   const normalized = useMemo(
-    () => normalizeCitationMarkers(content, citations),
+    () => normalizeDisplayMath(normalizeCitationMarkers(content, citations)),
     [content, citations]
   );
   const { visibleText, done } = useTypewriter(normalized, {
@@ -49,7 +53,11 @@ export default function AssistantMessage({
 
   return (
     <div className="text-sm lg:text-base leading-relaxed text-gray-100">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown
+        remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+        rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
+        components={components}
+      >
         {visibleText}
       </ReactMarkdown>
     </div>

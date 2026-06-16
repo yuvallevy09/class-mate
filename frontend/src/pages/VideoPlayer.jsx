@@ -3,7 +3,11 @@ import { Link, useLocation } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import {
+  MARKDOWN_REMARK_PLUGINS,
+  MARKDOWN_REHYPE_PLUGINS,
+  normalizeDisplayMath,
+} from "@/lib/markdownMath";
 import {
   FileText,
   MessageSquare,
@@ -811,10 +815,11 @@ export default function VideoPlayer() {
                     ) : aiSummaryText ? (
                       <div className="text-gray-300 text-sm leading-relaxed max-h-[400px] lg:max-h-none lg:flex-1 lg:min-h-0 overflow-y-auto pr-2">
                         <ReactMarkdown
-                          remarkPlugins={[remarkGfm]}
+                          remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+                          rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
                           components={markdownComponents}
                         >
-                          {String(aiSummaryMarkdown || "")}
+                          {normalizeDisplayMath(aiSummaryMarkdown || "")}
                         </ReactMarkdown>
                       </div>
                     ) : activeVideoAsset?.status &&

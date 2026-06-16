@@ -156,3 +156,13 @@ button:focus-visible {
     @apply bg-background text-foreground;
   }
 }
+
+/* KaTeX display math (`$$...$$`): a wide equation should scroll within its own
+   block rather than overflow the (often narrow) chat column and push horizontal
+   page scroll. The vertical clip keeps the scrollbar from covering glyphs. */
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
+}
