@@ -70,6 +70,15 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
     anthropic_model: str = Field(default="claude-sonnet-4-6", validation_alias="ANTHROPIC_MODEL")
 
+    # Per-task model selection (see app/ai/model_roles.py). When enabled, each
+    # pipeline step uses a model tiered to its job (Flash/Haiku/Sonnet) instead
+    # of the single global provider above; any tier whose provider key is unset
+    # falls back to the global provider. Set MODEL_ROLES_ENABLED=false to revert
+    # to the single-provider path. Haiku is the only extra model string needed
+    # (Flash reuses gemini_model, Sonnet reuses anthropic_model).
+    model_roles_enabled: bool = Field(default=True, validation_alias="MODEL_ROLES_ENABLED")
+    anthropic_haiku_model: str = Field(default="claude-haiku-4-5", validation_alias="ANTHROPIC_HAIKU_MODEL")
+
     # OpenAI (embeddings)
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     chat_history_max_messages: int = Field(default=12, validation_alias="CHAT_HISTORY_MAX_MESSAGES")

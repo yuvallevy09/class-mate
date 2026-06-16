@@ -30,6 +30,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.llm import build_lm
+from app.ai.model_roles import (
+    ANSWER_NO_CTX,
+    ANSWER_WITH_CTX,
+    CLARIFY,
+    GEN_RETRIEVAL,
+    ROUTER,
+    build_lm_for_role,
+    resolved_model_id,
+)
 from app.ai.stream_events import (
     AnswerEvent,
     CitationsEvent,
@@ -55,6 +64,17 @@ from app.schemas.viewing_context import ViewingContext
 # answer-from-context one) aren't truncated mid-JSON. The router and clarifier
 # would do fine with less, but using a single budget keeps the LM builder simple.
 _DEFAULT_MAX_TOKENS = 2048
+
+# Per-role output budgets. The answer signatures and retrieval-param generation
+# keep the generous default (avoid mid-JSON truncation); the router and clarifier
+# emit far less, so they get smaller budgets. Roles not listed use the default.
+_ROLE_MAX_TOKENS: dict[str, int] = {
+    ROUTER: 512,
+    CLARIFY: 1024,
+    ANSWER_NO_CTX: _DEFAULT_MAX_TOKENS,
+    GEN_RETRIEVAL: _DEFAULT_MAX_TOKENS,
+    ANSWER_WITH_CTX: _DEFAULT_MAX_TOKENS,
+}
 
 
 Route = Literal["answer", "retrieve", "clarify"]
@@ -329,6 +349,9 @@ class TeachingAssistant(dspy.Module):
         super().__init__()
         self._retriever = retriever
         self._lm: dspy.LM | None = lm
+        # Per-role LMs, built lazily and cached. Empty/unused when an LM is
+        # injected (tests pass a DummyLM via `lm=`, which overrides all roles).
+        self._lms: dict[str, dspy.LM] = {}
         self.router = dspy.ChainOfThought(RouteQuery)
         self.query_generator = dspy.ChainOfThought(GenerateRetrievalDetails)
         self.clarifier = dspy.Predict(AskClarification)
@@ -351,6 +374,39 @@ class TeachingAssistant(dspy.Module):
                 max_tokens=_DEFAULT_MAX_TOKENS,
             )
         return self._lm
+
+    def _lm_for(self, role: str) -> dspy.LM:
+        """Return the LM for a pipeline role, tiered per `model_roles.ROLE_TIERS`.
+
+        An injected LM (e.g. a `DummyLM` in tests) overrides every role. Built
+        LMs are cached per role for the life of the process singleton.
+        """
+        if self._lm is not None:
+            return self._lm
+        cached = self._lms.get(role)
+        if cached is None:
+            settings: Settings = get_settings()
+            cached = build_lm_for_role(
+                settings,
+                role,
+                temperature=float(settings.chat_temperature),
+                max_tokens=_ROLE_MAX_TOKENS.get(role, _DEFAULT_MAX_TOKENS),
+            )
+            self._lms[role] = cached
+        return cached
+
+    def _record_models(self, debug: dict[str, Any], *roles: str) -> None:
+        """Record the resolved model id per role into `debug["models"]`.
+
+        No-op when an LM is injected (tests) — the injected LM, not the
+        configured tier, is what runs, so the resolved id would be misleading.
+        """
+        if self._lm is not None:
+            return
+        settings: Settings = get_settings()
+        models = debug.setdefault("models", {})
+        for role in roles:
+            models[role] = resolved_model_id(settings, role)
 
     async def _recent_window(
         self,
@@ -410,8 +466,10 @@ class TeachingAssistant(dspy.Module):
         )
         route = _normalize_route(getattr(route_pred, "route", ""))
         _stash_reasoning(debug, "router_reasoning", route_pred)
+        self._record_models(debug, ROUTER)
 
         if route == "clarify":
+            self._record_models(debug, CLARIFY)
             answer = await asyncio.to_thread(
                 self._clarify,
                 course_info=ci_basic,
@@ -421,6 +479,7 @@ class TeachingAssistant(dspy.Module):
             return TeachingAssistantResult(answer=answer, route="clarify", debug=debug)
 
         if route == "answer":
+            self._record_models(debug, ANSWER_NO_CTX)
             answer = await asyncio.to_thread(
                 self._answer_no_ctx,
                 course_info=ci_basic,
@@ -430,6 +489,7 @@ class TeachingAssistant(dspy.Module):
             return TeachingAssistantResult(answer=answer, route="answer", debug=debug)
 
         # route == "retrieve"
+        self._record_models(debug, GEN_RETRIEVAL)
         params = await asyncio.to_thread(
             self._gen_retrieval_params,
             course_info=_view(course_info.to_detailed_info(), note),
@@ -466,6 +526,7 @@ class TeachingAssistant(dspy.Module):
                 "lecture transcripts returned nothing relevant. Answer carefully "
                 "and tell the student what information you don't have access to.)"
             )
+            self._record_models(debug, ANSWER_NO_CTX)
             answer = await asyncio.to_thread(
                 self._answer_no_ctx,
                 course_info=ci_basic,
@@ -487,6 +548,7 @@ class TeachingAssistant(dspy.Module):
         rendered_docs = [
             d.to_prompt_string(index=i) for i, d in enumerate(docs, start=1)
         ]
+        self._record_models(debug, ANSWER_WITH_CTX)
         answer = await asyncio.to_thread(
             self._answer_with_ctx,
             course_info=_view(course_info.to_header(), note),
@@ -545,6 +607,7 @@ class TeachingAssistant(dspy.Module):
         route_pred = None
         async for field, payload in self._astream_predict(
             self.router,
+            lm=self._lm_for(ROUTER),
             listen_fields=["reasoning"],
             course_info=ci_basic,
             conversation_history=ch_str,
@@ -557,14 +620,18 @@ class TeachingAssistant(dspy.Module):
                 thinking_seen = True
         route = _normalize_route(getattr(route_pred, "route", ""))
         _stash_reasoning(debug, "router_reasoning", route_pred)
+        self._record_models(debug, ROUTER)
 
         # --- clarify / general-answer routes: stream the reply, no retrieval ---
         if route in ("clarify", "answer"):
             predictor = self.clarifier if route == "clarify" else self.answer_without_context
             answer_field = "clarification" if route == "clarify" else "answer"
+            role = CLARIFY if route == "clarify" else ANSWER_NO_CTX
+            self._record_models(debug, role)
             out: dict[str, str] = {}
             async for ev in self._emit_answer(
                 predictor,
+                lm=self._lm_for(role),
                 answer_field=answer_field,
                 out=out,
                 thinking_separator="\n\n" if thinking_seen else "",
@@ -578,10 +645,12 @@ class TeachingAssistant(dspy.Module):
 
         # --- retrieve route ---
         yield StatusEvent(stage="searching", label="Searching course materials…")
+        self._record_models(debug, GEN_RETRIEVAL)
         params = None
         qg_first = True
         async for field, payload in self._astream_predict(
             self.query_generator,
+            lm=self._lm_for(GEN_RETRIEVAL),
             listen_fields=["reasoning"],
             course_info=_view(course_info.to_detailed_info(), note),
             conversation_history=ch_str,
@@ -621,9 +690,11 @@ class TeachingAssistant(dspy.Module):
                 "lecture transcripts returned nothing relevant. Answer carefully "
                 "and tell the student what information you don't have access to.)"
             )
+            self._record_models(debug, ANSWER_NO_CTX)
             out = {}
             async for ev in self._emit_answer(
                 self.answer_without_context,
+                lm=self._lm_for(ANSWER_NO_CTX),
                 answer_field="answer",
                 out=out,
                 thinking_separator="\n\n" if thinking_seen else "",
@@ -648,9 +719,11 @@ class TeachingAssistant(dspy.Module):
         rendered_docs = [
             d.to_prompt_string(index=i) for i, d in enumerate(docs, start=1)
         ]
+        self._record_models(debug, ANSWER_WITH_CTX)
         out = {}
         async for ev in self._emit_answer(
             self.answer_from_context,
+            lm=self._lm_for(ANSWER_WITH_CTX),
             answer_field="answer",
             out=out,
             thinking_separator="\n\n" if thinking_seen else "",
@@ -672,6 +745,7 @@ class TeachingAssistant(dspy.Module):
         self,
         predictor: dspy.Module,
         *,
+        lm: dspy.LM,
         listen_fields: list[str],
         **inputs: Any,
     ) -> AsyncIterator[tuple[str | None, Any]]:
@@ -691,7 +765,7 @@ class TeachingAssistant(dspy.Module):
             predictor, stream_listeners=listeners, async_streaming=True
         )
         final: Any = None
-        with dspy.settings.context(lm=self._get_lm()):
+        with dspy.settings.context(lm=lm):
             async for chunk in streamed(**inputs):
                 if isinstance(chunk, dspy.streaming.StreamResponse):
                     yield (chunk.signature_field_name, str(chunk.chunk or ""))
@@ -703,6 +777,7 @@ class TeachingAssistant(dspy.Module):
         self,
         predictor: dspy.Module,
         *,
+        lm: dspy.LM,
         answer_field: str,
         out: dict[str, str],
         thinking_separator: str = "",
@@ -727,7 +802,7 @@ class TeachingAssistant(dspy.Module):
         answer_streamed = False
         reasoning_seen = False
         async for field, payload in self._astream_predict(
-            predictor, listen_fields=listen, **inputs
+            predictor, lm=lm, listen_fields=listen, **inputs
         ):
             if field is None:
                 final = payload
@@ -764,7 +839,7 @@ class TeachingAssistant(dspy.Module):
         both `route` and `reasoning`. Label normalization is done by the
         caller via `_normalize_route`.
         """
-        with dspy.settings.context(lm=self._get_lm()):
+        with dspy.settings.context(lm=self._lm_for(ROUTER)):
             return self.router(
                 course_info=course_info,
                 conversation_history=conversation_history,
@@ -778,7 +853,7 @@ class TeachingAssistant(dspy.Module):
         conversation_history: str,
         user_query: str,
     ) -> str:
-        with dspy.settings.context(lm=self._get_lm()):
+        with dspy.settings.context(lm=self._lm_for(CLARIFY)):
             pred = self.clarifier(
                 course_info=course_info,
                 conversation_history=conversation_history,
@@ -793,7 +868,7 @@ class TeachingAssistant(dspy.Module):
         conversation_history: str,
         user_query: str,
     ) -> str:
-        with dspy.settings.context(lm=self._get_lm()):
+        with dspy.settings.context(lm=self._lm_for(ANSWER_NO_CTX)):
             pred = self.answer_without_context(
                 course_info=course_info,
                 conversation_history=conversation_history,
@@ -808,7 +883,7 @@ class TeachingAssistant(dspy.Module):
         conversation_history: str,
         user_query: str,
     ) -> dspy.Prediction:
-        with dspy.settings.context(lm=self._get_lm()):
+        with dspy.settings.context(lm=self._lm_for(GEN_RETRIEVAL)):
             return self.query_generator(
                 course_info=course_info,
                 conversation_history=conversation_history,
@@ -823,7 +898,7 @@ class TeachingAssistant(dspy.Module):
         user_query: str,
         retrieved_docs: list[str],
     ) -> str:
-        with dspy.settings.context(lm=self._get_lm()):
+        with dspy.settings.context(lm=self._lm_for(ANSWER_WITH_CTX)):
             pred = self.answer_from_context(
                 course_info=course_info,
                 conversation_history=conversation_history,

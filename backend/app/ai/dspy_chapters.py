@@ -5,7 +5,7 @@ from typing import Any
 
 import dspy
 
-from app.ai.llm import build_lm
+from app.ai.model_roles import CHAPTERS, build_lm_for_role
 from app.core.settings import Settings
 
 
@@ -42,7 +42,7 @@ def generate_chapters_dspy(*, settings: Settings, blocks: list[dict[str, Any]]) 
 
     Raises ValueError if not configured (missing key). Other errors may propagate.
     """
-    lm = build_lm(settings, temperature=0.0, max_tokens=700)
+    lm = build_lm_for_role(settings, CHAPTERS, temperature=0.0, max_tokens=700)
     pred = dspy.Predict(_ChapterizeSig)
 
     # Compact representation to keep token usage bounded.

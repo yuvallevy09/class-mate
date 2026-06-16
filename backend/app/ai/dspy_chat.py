@@ -5,6 +5,7 @@ import re
 import dspy
 
 from app.ai.llm import build_lm
+from app.ai.model_roles import TITLE, build_lm_for_role
 from app.core.settings import Settings
 
 
@@ -191,7 +192,7 @@ def generate_reply_dspy(
 
 
 def generate_title_dspy(*, settings: Settings, course_name: str, first_user_message: str) -> str:
-    lm = build_lm(settings, temperature=0.0, max_tokens=40)
+    lm = build_lm_for_role(settings, TITLE, temperature=0.0, max_tokens=40)
     pred = dspy.Predict(_TitleSig)
     with dspy.settings.context(lm=lm):
         out = pred(course_name=(course_name or "").strip(), first_user_message=(first_user_message or "").strip())

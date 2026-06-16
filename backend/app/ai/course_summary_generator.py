@@ -25,7 +25,7 @@ from typing import Any
 import dspy
 from pydantic import BaseModel, Field
 
-from app.ai.llm import build_lm
+from app.ai.model_roles import COURSE_SUMMARY, build_lm_for_role
 from app.core.settings import Settings, get_settings
 
 
@@ -109,8 +109,9 @@ class CourseSummaryGenerator(dspy.Module):
     def _get_lm(self) -> dspy.LM:
         if self._lm is None:
             settings: Settings = get_settings()
-            self._lm = build_lm(
+            self._lm = build_lm_for_role(
                 settings,
+                COURSE_SUMMARY,
                 temperature=float(settings.chat_temperature),
                 max_tokens=_DEFAULT_MAX_TOKENS,
             )

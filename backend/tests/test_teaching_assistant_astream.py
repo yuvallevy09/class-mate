@@ -21,6 +21,7 @@ from app.ai.stream_events import (
     DoneEvent,
     ThinkingEvent,
 )
+from app.ai.model_roles import ANSWER_WITH_CTX
 from app.ai.teaching_assistant import TeachingAssistant
 from app.rag.course_retriever import RetrievalDecision
 from app.schemas.conversation_history import ConversationHistory
@@ -265,6 +266,7 @@ async def test_emit_answer_smoke_against_real_provider() -> None:
         ev
         async for ev in ta._emit_answer(
             ta.answer_from_context,
+            lm=ta._lm_for(ANSWER_WITH_CTX),
             answer_field="answer",
             out=out,
             course_info="Course: Test",
