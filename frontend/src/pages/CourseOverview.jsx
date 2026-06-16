@@ -213,8 +213,9 @@ export default function CourseOverview() {
     queryKey: ["videoAssets", courseId],
     queryFn: () => listVideoAssets(courseId),
     enabled: !!courseId,
-    refetchInterval: (data) => {
-      const items = data || [];
+    // React Query v5: the callback receives the Query object, so read query.state.data.
+    refetchInterval: (query) => {
+      const items = query?.state?.data || [];
       const anyProcessing =
         Array.isArray(items) && items.some((a) => PROCESSING_STATUSES.includes(a.status));
       return anyProcessing ? 2000 : false;

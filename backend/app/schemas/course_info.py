@@ -107,15 +107,6 @@ class CourseInfo(BaseModel):
     name: str
     description: str | None = None
 
-    summary: str | None = Field(
-        default=None,
-        description=(
-            "Course-level summary. Not yet persisted in the DB (no column on `courses`); "
-            "placeholder for future use — either a stored AI summary or one synthesized from "
-            "lecture summaries at build time."
-        ),
-    )
-
     lectures: list[Lecture] = Field(default_factory=list)
 
     def lecture_by_slug(self, slug: str) -> Lecture | None:
@@ -161,17 +152,10 @@ class CourseInfo(BaseModel):
     # Naming by content (not by consumer) since `basic_info` is shared by several
     # signatures. All are pure string renderers — no I/O.
 
-    def _course_header_lines(
-        self, *, include_summary: bool, summary_max_chars: int
-    ) -> list[str]:
+    def _course_header_lines(self) -> list[str]:
         lines: list[str] = [f"Course: {self.name}"]
         if self.description and self.description.strip():
             lines.append(f"Description: {self.description.strip()}")
-        if include_summary and self.summary and self.summary.strip():
-            s = self.summary.strip()
-            if summary_max_chars and len(s) > summary_max_chars:
-                s = s[:summary_max_chars].rstrip() + "…"
-            lines.append(f"Course summary: {s}")
         return lines
 
     def to_header(self) -> str:
@@ -181,9 +165,7 @@ class CourseInfo(BaseModel):
         `AnswerFromContext`, where the substantive content comes from the
         retrieved docs and any catalog/summary text would invite uncited claims.
         """
-        return "\n".join(
-            self._course_header_lines(include_summary=False, summary_max_chars=0)
-        ).strip()
+        return "\n".join(self._course_header_lines()).strip()
 
     def to_basic_info(self) -> str:
         """Lean catalog view: course header + a one-line entry per lecture
@@ -193,7 +175,7 @@ class CourseInfo(BaseModel):
         relevance and redirect, without the full summaries that would tempt the
         model to answer from the catalog instead of retrieving.
         """
-        lines = self._course_header_lines(include_summary=True, summary_max_chars=600)
+        lines = self._course_header_lines()
         if self.lectures:
             lines.append("")
             lines.append("Lectures:")
@@ -209,7 +191,7 @@ class CourseInfo(BaseModel):
         — every slug stays visible (the old bottom-truncation could silently make
         late lectures invisible to routing).
         """
-        lines = self._course_header_lines(include_summary=True, summary_max_chars=1200)
+        lines = self._course_header_lines()
         if self.lectures:
             per_lecture = max(200, int(summary_budget) // len(self.lectures))
             lines.append("")

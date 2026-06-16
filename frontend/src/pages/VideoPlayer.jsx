@@ -203,7 +203,9 @@ export default function VideoPlayer() {
     queryFn: () => getVideoAssetSummary(videoAssetId),
     enabled: !!videoAssetId,
     // Poll while the asset is still processing and no summary has been stored yet.
-    refetchInterval: (data) => {
+    // React Query v5: the callback receives the Query object, so read query.state.data.
+    refetchInterval: (query) => {
+      const data = query?.state?.data;
       const status = String(data?.status || activeVideoAsset?.status || "").toLowerCase();
       const hasSummary = !!String(data?.aiSummary || "").trim();
       const processing = ["uploaded", "processing", "extracting_audio", "transcribing"].includes(status);
@@ -759,7 +761,7 @@ export default function VideoPlayer() {
               >
                 <div className="flex items-center gap-2">
                   <Sparkles className="w-5 h-5 text-purple-400" />
-                  <h2 className="text-xl font-semibold">AI Summary</h2>
+                  <h2 className="text-xl font-semibold">ClassMate's Notes</h2>
                 </div>
                 <span className={`text-gray-400 transition-transform ${isSummaryExpanded ? "" : "-rotate-90"}`}>
                   ▾

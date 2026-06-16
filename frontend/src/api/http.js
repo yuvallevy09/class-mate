@@ -7,7 +7,7 @@ function joinUrl(base, path) {
 }
 
 export function getApiBaseUrl() {
-  const v = import.meta?.env?.VITE_API_URL;
+  const v = import.meta.env.VITE_API_URL;
   return (typeof v === "string" && v.trim()) ? v.trim() : DEFAULT_API_URL;
 }
 

@@ -88,6 +88,39 @@ def _ffmpeg_extract_thumbnail(
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def _ffprobe_duration_seconds(*, ffprobe_bin: str, video_path: Path) -> float | None:
+    """Best-effort: return the video duration in seconds, or None if it can't be read."""
+    cmd = [
+        ffprobe_bin,
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(video_path),
+    ]
+    try:
+        out = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        text = out.stdout.decode("utf-8", "ignore").strip()
+        return float(text) if text else None
+    except Exception:
+        return None
+
+
+def _thumbnail_seek_seconds(*, settings: Settings, duration_seconds: float | None) -> float:
+    """Pick where to grab the thumbnail frame.
+
+    Longer videos tend to open on a black/intro frame, so seek further in for them.
+    """
+    if (
+        duration_seconds is not None
+        and duration_seconds >= float(settings.thumbnail_long_video_min_seconds)
+    ):
+        return float(settings.thumbnail_long_seek_seconds)
+    return float(settings.thumbnail_seek_seconds)
+
+
 def _thumbnail_key(*, course_id: UUID, video_asset_id: UUID) -> str:
     return f"courses/{course_id}/video-assets/{video_asset_id}/thumbnail.jpg"
 
@@ -106,11 +139,17 @@ def extract_and_upload_thumbnail(
     Returns the uploaded thumbnail key.
     """
     thumbnail_path = video_path.parent / "thumbnail.jpg"
+    duration_seconds = _ffprobe_duration_seconds(
+        ffprobe_bin=settings.ffprobe_bin, video_path=video_path
+    )
+    seek_seconds = _thumbnail_seek_seconds(
+        settings=settings, duration_seconds=duration_seconds
+    )
     _ffmpeg_extract_thumbnail(
         ffmpeg_bin=settings.ffmpeg_bin,
         video_path=video_path,
         thumbnail_path=thumbnail_path,
-        seek_seconds=float(settings.thumbnail_seek_seconds),
+        seek_seconds=seek_seconds,
     )
     key = _thumbnail_key(course_id=course_id, video_asset_id=video_asset_id)
     with thumbnail_path.open("rb") as f:
@@ -294,10 +333,19 @@ async def transcribe_video_asset(*, video_asset_id: UUID, requested_language: st
         await db.commit()
 
         s3 = _s3_client(settings)
+        # In /runsync mode a single HTTP call blocks for the whole job, so the HTTP
+        # timeout must cover the full transcription budget. In /run mode each call
+        # returns quickly and the overall budget is enforced by poll_until_complete.
+        runpod_http_timeout = (
+            float(settings.runpod_timeout_seconds)
+            if settings.runpod_use_runsync
+            else float(settings.runpod_http_timeout_seconds)
+        )
         runpod = RunpodClient(
             api_key=settings.runpod_api_key,
             endpoint_id=settings.runpod_endpoint_id,
             use_runsync=bool(settings.runpod_use_runsync),
+            timeout=runpod_http_timeout,
         )
 
         try:

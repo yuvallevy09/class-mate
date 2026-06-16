@@ -169,6 +169,5 @@ async def build_course_info(
         id=course.id,
         name=course.name,
         description=_clean_optional(course.description),
-        summary=_clean_optional(course.ai_summary),
         lectures=lectures,
     )

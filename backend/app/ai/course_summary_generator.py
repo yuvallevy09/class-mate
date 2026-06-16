@@ -2,7 +2,7 @@
 
 Given the course's lectures in chronological order (each with its per-lecture
 AI summary), produces a single "what we've learned so far" recap shown on the
-Course Overview page and fed into `CourseInfo.summary`.
+Course Overview page.
 
 Mirrors `lecture_artifact_generator.py`:
 

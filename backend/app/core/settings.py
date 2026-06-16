@@ -50,13 +50,27 @@ class Settings(BaseSettings):
 
     # ffmpeg (video -> audio/thumbnail)
     ffmpeg_bin: str = Field(default="ffmpeg", validation_alias="FFMPEG_BIN")
+    ffprobe_bin: str = Field(default="ffprobe", validation_alias="FFPROBE_BIN")
     thumbnail_seek_seconds: float = Field(default=1.0, validation_alias="THUMBNAIL_SEEK_SECONDS")
+    # For longer videos the opening frame is often a black/intro frame, so seek
+    # further in. Videos at/above this duration use thumbnail_long_seek_seconds.
+    thumbnail_long_video_min_seconds: float = Field(
+        default=300.0, validation_alias="THUMBNAIL_LONG_VIDEO_MIN_SECONDS"
+    )
+    thumbnail_long_seek_seconds: float = Field(
+        default=60.0, validation_alias="THUMBNAIL_LONG_SEEK_SECONDS"
+    )
 
     # Runpod serverless (faster-whisper)
     runpod_api_key: str | None = Field(default=None, validation_alias="RUNPOD_API_KEY")
     runpod_endpoint_id: str | None = Field(default=None, validation_alias="RUNPOD_ENDPOINT_ID")
     runpod_poll_interval_seconds: float = Field(default=2.0, validation_alias="RUNPOD_POLL_INTERVAL_SECONDS")
-    runpod_timeout_seconds: float = Field(default=600.0, validation_alias="RUNPOD_TIMEOUT_SECONDS")
+    # Overall budget for a transcription job (used as the poll deadline in /run mode,
+    # and as the blocking HTTP timeout in /runsync mode). Long lectures need headroom.
+    runpod_timeout_seconds: float = Field(default=1800.0, validation_alias="RUNPOD_TIMEOUT_SECONDS")
+    # Per-request HTTP timeout when polling (/run mode): each /run + /status call returns
+    # quickly, so this stays small and independent of the overall job budget above.
+    runpod_http_timeout_seconds: float = Field(default=120.0, validation_alias="RUNPOD_HTTP_TIMEOUT_SECONDS")
     runpod_use_runsync: bool = Field(default=True, validation_alias="RUNPOD_USE_RUNSYNC")
     runpod_whisper_model: str = Field(default="base", validation_alias="RUNPOD_WHISPER_MODEL")
 
@@ -169,6 +183,8 @@ class Settings(BaseSettings):
             raise ValueError("RUNPOD_POLL_INTERVAL_SECONDS must be > 0")
         if float(self.runpod_timeout_seconds) <= 0:
             raise ValueError("RUNPOD_TIMEOUT_SECONDS must be > 0")
+        if float(self.runpod_http_timeout_seconds) <= 0:
+            raise ValueError("RUNPOD_HTTP_TIMEOUT_SECONDS must be > 0")
         return self
 
 

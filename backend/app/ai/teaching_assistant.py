@@ -492,7 +492,7 @@ class TeachingAssistant(dspy.Module):
         self._record_models(debug, GEN_RETRIEVAL)
         params = await asyncio.to_thread(
             self._gen_retrieval_params,
-            course_info=_view(course_info.to_detailed_info(), note),
+            course_info=ci_basic,
             conversation_history=ch_str,
             user_query=uq,
         )
@@ -652,7 +652,7 @@ class TeachingAssistant(dspy.Module):
             self.query_generator,
             lm=self._lm_for(GEN_RETRIEVAL),
             listen_fields=["reasoning"],
-            course_info=_view(course_info.to_detailed_info(), note),
+            course_info=ci_basic,
             conversation_history=ch_str,
             user_query=uq,
         ):
