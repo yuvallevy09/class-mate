@@ -38,24 +38,17 @@ _DEFAULT_MAX_TOKENS = 4_096
 
 
 class SummarizeCourse(dspy.Signature):
-    """You are a teaching assistant writing a running recap of a course for its students. Given the course's lectures in chronological order, each with its own summary, write a "what we've learned so far" summary of the whole course."""
 
     course_context: str = dspy.InputField(
         desc=(
             "Course name and description, followed by each lecture's title and "
-            "summary in chronological order."
+            "description in chronological order."
         )
     )
 
     generated_course_summary: str = dspy.OutputField(
         desc=(
-            "2-4 short paragraphs of plain prose (no headings or bullet lists) "
-            "summarizing what the course has covered so far, narrating the arc "
-            "from the first lecture to the most recent.\n"
-            "- Be faithful to the lecture summaries only. Do not invent content, "
-            "and do not pad with filler.\n"
-            "- Do NOT include timestamps such as '[#12:34]'; they refer to "
-            "positions inside individual videos and are meaningless here."
+            "1-2 paragraphs summarizing what the course is about. Use markdown to emphasize key concepts. Keep the summary organized and focus on the most relevant points."
         )
     )
 

@@ -93,6 +93,13 @@ class Settings(BaseSettings):
     model_roles_enabled: bool = Field(default=True, validation_alias="MODEL_ROLES_ENABLED")
     anthropic_haiku_model: str = Field(default="claude-haiku-4-5", validation_alias="ANTHROPIC_HAIKU_MODEL")
 
+    # Semantic chapterization (LLM-segmented chapters). OFF by default: chapters are
+    # not yet surfaced in the player UI and only lightly affect retrieval, so the LLM
+    # call isn't worth running. When false, the pipeline writes the single
+    # "Full Lecture" fallback chapter without calling the model. Flip to true to
+    # generate real chapters (the output token budget is already sized for it).
+    chapters_enabled: bool = Field(default=False, validation_alias="CHAPTERS_ENABLED")
+
     # OpenAI (embeddings)
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     chat_history_max_messages: int = Field(default=12, validation_alias="CHAT_HISTORY_MAX_MESSAGES")

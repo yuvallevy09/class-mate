@@ -1,7 +1,8 @@
 """Service layer for generating + persisting the course-level AI summary.
 
-Builds a context from the course's per-lecture summaries (chronological), runs
-the `CourseSummaryGenerator` DSPy module, and persists `ai_summary` (plus
+Builds a context from the course's per-lecture descriptions (chronological;
+falling back to the full lecture summary when a lecture has no description),
+runs the `CourseSummaryGenerator` DSPy module, and persists `ai_summary` (plus
 `ai_summary_generated_at` / `ai_summary_error`) onto `courses`.
 
 Behavior:
@@ -39,8 +40,8 @@ from app.services.course_info import invalidate_course_info_cache
 # Statuses with a usable transcript (and therefore lecture artifacts).
 _DONE_STATUSES = ("done", "done_no_embeddings", "done_no_index")
 
-# Lecture summaries are short Markdown documents; this bound keeps a
-# pathological course from blowing up the prompt.
+# Lecture descriptions are short (1–3 sentences); this bound keeps a
+# pathological course (or a fallback to full summaries) from blowing up the prompt.
 _DEFAULT_CONTEXT_CHAR_BUDGET = 200_000
 
 
@@ -107,7 +108,11 @@ async def generate_and_store_course_summary(
 
     lectures: list[tuple[str, str]] = []
     for asset, content in rows.all():
-        body = (asset.ai_summary or "").strip() or (asset.ai_description or "").strip()
+        # Prefer the short per-lecture description over the full summary: the
+        # course recap only needs each lecture's gist, and descriptions keep the
+        # combined context an order of magnitude smaller. Fall back to the full
+        # summary when a lecture has no description yet.
+        body = (asset.ai_description or "").strip() or (asset.ai_summary or "").strip()
         if not body:
             continue
         title = (

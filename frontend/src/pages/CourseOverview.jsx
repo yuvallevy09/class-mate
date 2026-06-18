@@ -15,11 +15,65 @@ import { createPageUrl, courseGradient } from "@/utils";
 import { getCourse } from "@/api/courses";
 import { listCourseContents } from "@/api/courseContents";
 import { listVideoAssets } from "@/api/videoAssets";
+import ReactMarkdown from "react-markdown";
+
 import { Button } from "@/components/ui/button";
 import Navbar from "@/components/Navbar";
 import CourseSidebar from "@/components/CourseSidebar";
+import {
+  MARKDOWN_REMARK_PLUGINS,
+  MARKDOWN_REHYPE_PLUGINS,
+  normalizeDisplayMath,
+} from "@/lib/markdownMath";
 
 const PROCESSING_STATUSES = ["processing", "extracting_audio", "transcribing"];
+
+// Markdown styling for the course summary. Self-contained (no player-specific
+// link handlers like VideoPlayer's map) — the summary is plain prose that may
+// carry headings, lists, emphasis, or `$…$` math.
+const summaryMarkdownComponents = {
+  p: ({ children }) => (
+    <p className="text-gray-300 leading-relaxed mb-4 last:mb-0">{children}</p>
+  ),
+  strong: ({ children }) => <strong className="font-semibold text-gray-200">{children}</strong>,
+  em: ({ children }) => <em className="italic">{children}</em>,
+  ul: ({ children }) => (
+    <ul className="my-3 ml-5 list-disc space-y-1 text-gray-300">{children}</ul>
+  ),
+  ol: ({ children }) => (
+    <ol className="my-3 ml-5 list-decimal space-y-1 text-gray-300">{children}</ol>
+  ),
+  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+  h1: ({ children }) => <h1 className="mt-4 mb-2 text-lg font-semibold text-gray-100">{children}</h1>,
+  h2: ({ children }) => <h2 className="mt-4 mb-2 text-base font-semibold text-gray-100">{children}</h2>,
+  h3: ({ children }) => <h3 className="mt-3 mb-2 text-sm font-semibold text-gray-100">{children}</h3>,
+  blockquote: ({ children }) => (
+    <blockquote className="my-3 border-l-2 border-purple-500/30 pl-4 italic text-gray-400">
+      {children}
+    </blockquote>
+  ),
+  a: ({ children, href }) => (
+    <a
+      href={String(href || "")}
+      target="_blank"
+      rel="noreferrer"
+      className="text-purple-300 underline underline-offset-4 hover:text-purple-200"
+    >
+      {children}
+    </a>
+  ),
+  code: ({ className, children }) => {
+    const isBlock = String(className || "").includes("language-");
+    if (isBlock) return <code className={className}>{children}</code>;
+    return (
+      <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.95em]">{children}</code>
+    );
+  },
+  pre: ({ children }) => (
+    <pre className="my-3 overflow-x-auto rounded-xl bg-black/40 p-4 text-sm">{children}</pre>
+  ),
+  hr: () => <hr className="my-4 border-white/10" />,
+};
 
 function formatDate(iso) {
   if (!iso) return null;
@@ -58,20 +112,17 @@ function SummaryContent({ state, summary }) {
     );
   }
 
-  const paragraphs = String(summary || "")
-    .split(/\n\s*\n/)
-    .map((p) => p.trim())
-    .filter(Boolean);
-
   return (
     <div>
       <div className="relative">
         <div className={expanded ? "" : "max-h-44 overflow-hidden"}>
-          {paragraphs.map((p, i) => (
-            <p key={i} className="text-gray-300 leading-relaxed mb-4 last:mb-0">
-              {p}
-            </p>
-          ))}
+          <ReactMarkdown
+            remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+            rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
+            components={summaryMarkdownComponents}
+          >
+            {normalizeDisplayMath(String(summary || ""))}
+          </ReactMarkdown>
         </div>
         {!expanded && (
           <div className="absolute bottom-0 inset-x-0 h-16 bg-gradient-to-t from-[#0F0F0F] to-transparent pointer-events-none" />

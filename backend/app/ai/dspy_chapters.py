@@ -42,7 +42,11 @@ def generate_chapters_dspy(*, settings: Settings, blocks: list[dict[str, Any]]) 
 
     Raises ValueError if not configured (missing key). Other errors may propagate.
     """
-    lm = build_lm_for_role(settings, CHAPTERS, temperature=0.0, max_tokens=700)
+    # 700 was far too small: the chapter JSON (titles + descriptions for N chapters)
+    # routinely exceeds it and truncates mid-string, which fails json.loads and forces
+    # the "Full Lecture" fallback. Reasoning models (Gemini Flash) also spend part of
+    # the budget on thinking tokens. 8000 holds full output for hour-plus lectures.
+    lm = build_lm_for_role(settings, CHAPTERS, temperature=0.0, max_tokens=8000)
     pred = dspy.Predict(_ChapterizeSig)
 
     # Compact representation to keep token usage bounded.

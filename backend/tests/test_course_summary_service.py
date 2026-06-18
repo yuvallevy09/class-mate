@@ -143,6 +143,58 @@ async def test_generates_and_stores_summary_from_lecture_summaries() -> None:
 
 
 @pytest.mark.asyncio
+async def test_prefers_description_over_full_summary() -> None:
+    """The context is built from lecture descriptions; the full summary is only a
+    fallback when a lecture has no description."""
+    settings = get_settings()
+    if not await _can_connect(settings.database_url):
+        pytest.skip("Database not reachable. Start Postgres (backend/docker-compose.yml).")
+    await asyncio.to_thread(_run_migrations_sync)
+
+    fake = _FakeGenerator(CourseSummary(generated_summary="Recap."))
+
+    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+    SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with SessionLocal() as session:
+            user = User(email=f"u-{uuid4()}@e.com", hashed_password=hash_password("pw"), display_name="T")
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+            course = Course(user_id=user.id, name="Linear Algebra", description="Vectors and matrices.")
+            session.add(course)
+            await session.commit()
+            await session.refresh(course)
+
+            # L1 has both → description wins; L2 has only a summary → summary fallback.
+            for i, (desc, summ) in enumerate(
+                [("Short desc for L1.", "Full summary for L1."), (None, "Full summary for L2.")], start=1
+            ):
+                content = CourseContent(
+                    course_id=course.id, category="media", title=f"Lecture {i} title",
+                    description=None, file_key=f"k{i}", original_filename=f"l{i}.mp4", mime_type="video/mp4",
+                )
+                session.add(content)
+                await session.flush()
+                session.add(VideoAsset(
+                    course_id=course.id, content_id=content.id, source_file_key=f"k{i}",
+                    mime_type="video/mp4", status="done", ai_description=desc, ai_summary=summ,
+                ))
+            await session.commit()
+
+            await svc.generate_and_store_course_summary(
+                db=session, settings=settings, course_id=course.id, generator=fake
+            )
+
+            ctx = fake.calls[0]
+            assert "Short desc for L1." in ctx          # description preferred
+            assert "Full summary for L1." not in ctx    # full summary not used when a description exists
+            assert "Full summary for L2." in ctx        # fallback when no description
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_replaces_existing_summary_on_success() -> None:
     settings = get_settings()
     if not await _can_connect(settings.database_url):

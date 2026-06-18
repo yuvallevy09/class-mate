@@ -274,10 +274,16 @@ function UploadCardBody({ upload, phase, viewMode, onRetry, onDismiss }) {
             </div>
           </>
         ) : (
+          // Persist only under the stable server content id — never the ephemeral
+          // local upload id, which resets to upload-0/1/... on each page load and is
+          // never cleared from localStorage, so a new upload would resume from a
+          // previous one's stale value (the "bar starts at 37%" bug). During the local
+          // upload phase (no contentId yet) persistKey is null, so the bar starts at 0;
+          // cross-refresh resume still works once the contentId exists.
           <SmoothProgressRow
             phase={phase}
             uploadPct={upload.progress}
-            persistKey={upload.contentId || upload.id}
+            persistKey={upload.contentId || null}
           />
         )}
       </div>

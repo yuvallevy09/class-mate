@@ -34,11 +34,15 @@ LECTURE_SUMMARY = "lecture_summary"
 
 # --- Tier assignment per role (the mapping decision lives here) ---
 #
-# flash  = optional cheapest tier (Gemini). Currently unused — router/title were
-#          moved to haiku to keep the pipeline on a single provider (Anthropic)
-#          and avoid Gemini billing. Re-point a role here to use Flash again.
-# haiku  = high-volume internal steps (router/title) + user-facing prose without
-#          citations + background structured work
+# flash  = cheapest tier (Gemini). Display-only / terminal outputs (course
+#          summary, chat conversation title) plus chapter generation — an
+#          input-heavy job (whole transcript in, short list out) where the
+#          cheapest capable model wins. Note: chapters feed retrieval windows +
+#          citations, so validate segmentation quality after re-tiering. Falls
+#          back to the global provider when GOOGLE_API_KEY is unset (see
+#          build_lm_for_role).
+# haiku  = high-volume internal chat steps (router/clarify) + user-facing prose
+#          without citations (answer-without-context)
 # sonnet = the two correctness gates (retrieval-in, answer-out) + the
 #          per-lecture summary that feeds retrieval context
 #
@@ -50,9 +54,9 @@ ROLE_TIERS: dict[str, str] = {
     ANSWER_NO_CTX: "haiku",
     GEN_RETRIEVAL: "sonnet",
     ANSWER_WITH_CTX: "sonnet",
-    TITLE: "haiku",
-    CHAPTERS: "haiku",
-    COURSE_SUMMARY: "haiku",
+    TITLE: "flash",
+    CHAPTERS: "flash",
+    COURSE_SUMMARY: "flash",
     LECTURE_SUMMARY: "sonnet",
 }
 
