@@ -250,22 +250,26 @@ async def chapterize_or_fallback(
     lc = (language_code or "").strip() or "und"
     settings = get_settings()
 
-    seg_res = await db.execute(
-        select(TranscriptSegment)
-        .where(TranscriptSegment.video_asset_id == video_asset_id, TranscriptSegment.language_code == lc)
-        .order_by(TranscriptSegment.start_sec.asc())
-    )
-    segs = list(seg_res.scalars().all())
-    blocks = _build_blocks_from_segments(segments=segs, target_block_seconds=20.0, max_block_seconds=30.0)
-    if blocks:
-        try:
-            return await replace_with_semantic_chapters(
-                db=db, video_asset_id=video_asset_id, language_code=lc, settings=settings, blocks=blocks
-            )
-        except Exception:
-            pass
+    # Feature-flagged off by default: chapters aren't surfaced in the player UI yet and
+    # only lightly affect retrieval, so we skip the LLM call and write the single
+    # "Full Lecture" fallback. Flip CHAPTERS_ENABLED=true to generate real chapters.
+    if getattr(settings, "chapters_enabled", False):
+        seg_res = await db.execute(
+            select(TranscriptSegment)
+            .where(TranscriptSegment.video_asset_id == video_asset_id, TranscriptSegment.language_code == lc)
+            .order_by(TranscriptSegment.start_sec.asc())
+        )
+        segs = list(seg_res.scalars().all())
+        blocks = _build_blocks_from_segments(segments=segs, target_block_seconds=20.0, max_block_seconds=30.0)
+        if blocks:
+            try:
+                return await replace_with_semantic_chapters(
+                    db=db, video_asset_id=video_asset_id, language_code=lc, settings=settings, blocks=blocks
+                )
+            except Exception:
+                pass
 
-    # Fallback
+    # Fallback (also the default path when CHAPTERS_ENABLED is false — no model call).
     fb = await replace_with_fallback_chapter(db=db, video_asset_id=video_asset_id, language_code=lc, end_sec=end_sec)
     return [fb]
 

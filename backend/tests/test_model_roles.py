@@ -48,7 +48,7 @@ def _settings(**over):
     "role, expected",
     [
         (ROUTER, _HAIKU),
-        (TITLE, _FLASH),
+        (TITLE, _HAIKU),
         (CLARIFY, _HAIKU),
         (ANSWER_NO_CTX, _HAIKU),
         (CHAPTERS, _FLASH),

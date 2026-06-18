@@ -80,10 +80,18 @@ async def _find_chapter_at(
     video_asset_id: UUID,
     ts: float,
 ) -> VideoChapter | None:
-    """Return the chapter whose [start_sec, end_sec) contains `ts`, or None.
+    """Return the *real* semantic chapter whose [start_sec, end_sec) contains `ts`, or None.
 
     Queried on demand for a single lecture (this path is rare) rather than
     preloaded into `CourseInfo` on every chat turn.
+
+    Excludes fallback chapters (`model_id IS NULL`). The fallback is a single
+    "Full Lecture" placeholder spanning the entire video (written when semantic
+    chapterization is disabled or fails); using it as a retrieval window would
+    make `retrieve_explicitly` return the whole lecture (and the recent-window
+    anchor would inherit a useless "Full Lecture" title). Skipping it lets the
+    caller fall back to a bounded window around the timestamp instead. Real
+    chapters always carry a `model_id` (see `replace_with_semantic_chapters`).
 
     Half-open on the end so adjacent chapters (A ends at 600.0, B starts at
     600.0) attribute `ts=600.0` to B, matching the natural reading of "this is
@@ -95,6 +103,7 @@ async def _find_chapter_at(
         select(VideoChapter)
         .where(
             VideoChapter.video_asset_id == video_asset_id,
+            VideoChapter.model_id.isnot(None),
             VideoChapter.start_sec <= ts,
             VideoChapter.end_sec > ts,
         )

@@ -34,15 +34,17 @@ LECTURE_SUMMARY = "lecture_summary"
 
 # --- Tier assignment per role (the mapping decision lives here) ---
 #
-# flash  = cheapest tier (Gemini). Display-only / terminal outputs (course
-#          summary, chat conversation title) plus chapter generation — an
-#          input-heavy job (whole transcript in, short list out) where the
-#          cheapest capable model wins. Note: chapters feed retrieval windows +
-#          citations, so validate segmentation quality after re-tiering. Falls
-#          back to the global provider when GOOGLE_API_KEY is unset (see
-#          build_lm_for_role).
-# haiku  = high-volume internal chat steps (router/clarify) + user-facing prose
-#          without citations (answer-without-context)
+# flash  = cheapest tier (Gemini). The course summary (display-only) and chapter
+#          generation — an input-heavy job (whole transcript in, short list out)
+#          where the cheapest capable model wins. Note: chapters feed retrieval
+#          windows + citations, so validate segmentation quality after re-tiering.
+#          NOT for tiny-budget tasks: Gemini Flash spends "thinking" tokens that
+#          count against max_tokens, so a small budget (e.g. the title's 40)
+#          truncates to empty output — that's why TITLE lives on haiku. Falls back
+#          to the global provider when GOOGLE_API_KEY is unset (see build_lm_for_role).
+# haiku  = high-volume internal chat steps (router/clarify), user-facing prose
+#          without citations (answer-without-context), and the chat title (a
+#          trivial 3-5 word label that a non-thinking model nails at a tiny budget)
 # sonnet = the two correctness gates (retrieval-in, answer-out) + the
 #          per-lecture summary that feeds retrieval context
 #
@@ -54,7 +56,7 @@ ROLE_TIERS: dict[str, str] = {
     ANSWER_NO_CTX: "haiku",
     GEN_RETRIEVAL: "sonnet",
     ANSWER_WITH_CTX: "sonnet",
-    TITLE: "flash",
+    TITLE: "haiku",
     CHAPTERS: "flash",
     COURSE_SUMMARY: "flash",
     LECTURE_SUMMARY: "sonnet",

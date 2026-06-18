@@ -118,6 +118,7 @@ async def test_retrieve_explicitly_returns_chapter_bounded_transcript_when_in_ch
                         end_sec=600.0,
                         title="Welcome",
                         description=None,
+                        model_id="test-chapter-model",
                     ),
                     VideoChapter(
                         video_asset_id=asset.id,
@@ -127,6 +128,7 @@ async def test_retrieve_explicitly_returns_chapter_bounded_transcript_when_in_ch
                         end_sec=1200.0,
                         title="OSI Model",
                         description=None,
+                        model_id="test-chapter-model",
                     ),
                     VideoChapter(
                         video_asset_id=asset.id,
@@ -136,6 +138,7 @@ async def test_retrieve_explicitly_returns_chapter_bounded_transcript_when_in_ch
                         end_sec=2400.0,
                         title="TCP Handshake",
                         description=None,
+                        model_id="test-chapter-model",
                     ),
                 ]
             )
@@ -201,6 +204,81 @@ async def test_retrieve_explicitly_returns_chapter_bounded_transcript_when_in_ch
             assert "First the client sends a SYN." in doc.text
             assert "Welcome to the course." not in doc.text
             assert "That concludes the lecture." not in doc.text
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_retrieve_explicitly_ignores_fallback_chapter_and_uses_bounded_window() -> None:
+    # Regression: a "Full Lecture" fallback chapter (model_id IS NULL) spans the
+    # whole video. It must NOT be used as the retrieval window — otherwise a
+    # timestamped/deictic question in video mode cites the entire lecture
+    # (the "0:00–62:05 pill" bug). Explicit retrieval should ignore it and fall
+    # back to the bounded window around the timestamp.
+    settings = get_settings()
+    if not await _can_connect(settings.database_url):
+        pytest.skip("Database not reachable. Start Postgres (backend/docker-compose.yml).")
+
+    await asyncio.to_thread(_run_migrations_sync)
+
+    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+    SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with SessionLocal() as session:
+            _, course = await _create_user_and_course(session)
+            content, asset = await _create_lecture(session, course=course, title="Lecture A")
+
+            # Single fallback chapter spanning the whole lecture (model_id=None).
+            session.add(
+                VideoChapter(
+                    video_asset_id=asset.id,
+                    language_code="en",
+                    chapter_index=0,
+                    start_sec=0.0,
+                    end_sec=3600.0,
+                    title="Full Lecture",
+                    description=None,
+                    model_id=None,
+                )
+            )
+            session.add_all(
+                [
+                    TranscriptSegment(
+                        course_id=course.id,
+                        video_asset_id=asset.id,
+                        start_sec=0.0,
+                        end_sec=30.0,
+                        text="Way back at the start.",
+                        language_code="en",
+                    ),
+                    TranscriptSegment(
+                        course_id=course.id,
+                        video_asset_id=asset.id,
+                        start_sec=1500.0,
+                        end_sec=1530.0,
+                        text="The moment in question.",
+                        language_code="en",
+                    ),
+                ]
+            )
+            await session.commit()
+
+            info = await build_course_info(db=session, course=course)
+            docs = await retrieve_explicitly(
+                db=session,
+                course_info=info,
+                lecture_slug="L1",
+                timestamp="25:00",  # 1500s
+                fallback_window_sec=60.0,
+            )
+            assert len(docs) == 1
+            doc = docs[0]
+            # Fallback chapter ignored: no chapter attribution, bounded window only.
+            assert doc.chapter_title is None
+            assert doc.start_sec != 0.0
+            assert doc.end_sec < 3600.0
+            assert "The moment in question." in doc.text
+            assert "Way back at the start." not in doc.text
     finally:
         await engine.dispose()
 
@@ -440,6 +518,7 @@ async def test_retrieve_explicitly_source_label_and_prompt_string() -> None:
                     end_sec=600.0,
                     title="Welcome",
                     description=None,
+                    model_id="test-chapter-model",
                 )
             )
             session.add(
@@ -501,6 +580,7 @@ async def test_retrieve_recent_window_returns_trailing_segments_up_to_head() -> 
                     start_sec=0.0,
                     end_sec=600.0,
                     title="Intro Chapter",
+                    model_id="test-chapter-model",
                     description=None,
                 )
             )

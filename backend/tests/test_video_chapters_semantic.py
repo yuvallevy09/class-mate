@@ -59,6 +59,9 @@ async def test_chapterize_or_fallback_uses_semantic_when_available(monkeypatch) 
         }
 
     monkeypatch.setattr(chapters_svc, "generate_chapters_dspy", _fake_generate_chapters_dspy)
+    # Semantic chapterization is feature-flagged off by default; enable it for this test
+    # (the service reads the same cached settings singleton via get_settings()).
+    monkeypatch.setattr(settings, "chapters_enabled", True)
 
     engine = create_async_engine(settings.database_url, pool_pre_ping=True)
     SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
