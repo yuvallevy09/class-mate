@@ -1,68 +1,67 @@
 # ClassMate
 
-ClassMate is a learning companion that helps students organize academic materials and get context-aware help exactly where they need it.
+ClassMate is a study companion for **lecture videos**. You upload a course's lectures, ClassMate transcribes them, summarizes them, and lets you chat with an AI assistant that answers from what was actually said in class — with citations that jump you to the exact moment in the video.
 
-Users can create courses, upload and manage lecture slides/PDFs/other resources, and interact with an AI assistant that is scoped to a specific course. Instead of a generic chatbot, ClassMate is designed to understand your materials—enabling questions like:
+Instead of a generic chatbot, the assistant is grounded in your lectures, enabling questions like:
 
 - “Where did we cover matrix multiplication?”
-- “Based on previous exams, can you come up with new exam questions for me to practice?”
+- “Summarize what the professor said between minutes 12 and 20 of lecture 3.”
+- “I'm at 27:36 in this lecture — what is she referring to here?”
+
+> **Scope today:** ClassMate handles **video lectures only**. Uploads are restricted to `video/*`, and the content model is video-only end to end (DB, API, and UI). There is no PDF/notes/slides ingestion in this version — see the [Roadmap](#roadmap).
 
 ---
 
-## What’s implemented so far
+## What's implemented
 
-### Core product features
+### Core product
 
-- **Authentication (cookie-based)**: signup/login/logout with refresh sessions.
-- **Course management**: create/list/view/delete courses (per-user ownership enforced).
-- **Course content library**:
-  - Create/list/delete content items per course and category (notes, exams, media, etc.).
-  - Optional file attachment metadata stored alongside content.
-- **File uploads (S3-compatible, presigned URLs)**:
-  - Backend issues **presigned PUT** URLs; browser uploads directly to object storage.
-  - Backend can generate **presigned download** links for attached files.
-- **Course chat (course-scoped, persisted)**:
-  - Course chat endpoint: `POST /api/v1/courses/{courseId}/chat`
-  - Backend persists **conversations + messages** in Postgres and exposes:
-    - `GET /api/v1/courses/{courseId}/conversations`
-    - `GET /api/v1/conversations/{conversationId}/messages`
-    - `DELETE /api/v1/conversations/{conversationId}`
-- Backend generates responses via **Gemini (LangChain)** when `GOOGLE_API_KEY` is configured.
-- **RAG (PDF → per-course vector index → citations)**:
-  - File-backed **PDF** course contents are indexed into a persisted per-course **Chroma** store on disk.
-  - Indexing is triggered automatically when you create a content item with an attached file (`POST /courses/{courseId}/contents`), and can also be triggered manually.
-  - Chat uses retrieval **best-effort** (injects retrieved excerpts into the prompt when an index exists) and returns `citations[]` with snippet + metadata (e.g. `original_filename`, `page`, `score`).
+- **Authentication (cookie-based)**: signup / login / logout / refresh, with server-side refresh sessions (rotating, revocable).
+- **Courses**: create / list / view / delete, per-user ownership enforced on every route.
+- **Video lectures — upload → transcription → AI understanding**:
+  - Direct-to-S3 upload via presigned `PUT`, then an atomic server-side **finalize** that creates the lecture record and (optionally) kicks off processing.
+  - A background pipeline extracts audio + a thumbnail with **ffmpeg**, transcribes the audio with **faster-whisper on Runpod serverless**, and stores timestamped transcript **segments**.
+  - For each lecture, an AI **title, description, and timestamped summary** are generated; a course-level **summary** is refreshed as lectures complete.
+  - Optional **semantic chapterization** (off by default — see [LLM configuration](#llm-configuration)).
+- **AI chat (grounded, streaming, persisted)**:
+  - Two surfaces: **course-wide** chat and **per-lecture** chat (separate conversation spaces). Per-lecture chat is **viewing-context aware** — it knows which lecture and timestamp you're watching.
+  - Responses **stream over Server-Sent Events** (status → thinking → citations → answer), with a non-streaming endpoint as a fallback.
+  - **Conversations and messages are persisted** in Postgres; each surface has its own conversation history (including a per-lecture conversation switcher).
+  - **Citations** are rendered as inline pills that deep-link to the exact timestamp in the player.
+- **Retrieval (RAG)**: lecture transcripts are chunked and indexed in **Postgres** for hybrid (lexical + vector) retrieval. The retrieval corpus is **transcripts only**.
 
-### Security & privacy baseline
+### Security baseline
 
-- **Ownership guarantees**: all course/content APIs verify the authenticated user owns the target course/content.
-- **Cookie auth + CSRF protection**:
-  - HTTP-only access/refresh cookies.
-  - CSRF middleware (double-submit cookie) requiring `X-CSRF-Token` for unsafe methods.
-- **CORS configured for cookie auth**: origins are explicit and `allow_credentials=true` is enabled.
+- **Ownership**: every course/lecture/conversation route verifies the authenticated user owns the resource.
+- **Cookie auth + CSRF**: HTTP-only access/refresh cookies; refresh tokens are stored only as keyed HMAC hashes and rotate on use. CSRF is a double-submit cookie requiring `X-CSRF-Token` on unsafe methods.
+- **CORS for cookie auth**: explicit origins with `allow_credentials=true` (no wildcard).
+
+> **Not yet implemented / good to know:** there is no application-level rate limiting; model "thinking" is streamed live but not persisted (it's gone on reload); chapters are off by default; and the dev `JWT_SECRET` must be overridden in production.
 
 ---
 
 ## Architecture
 
-This repo uses a simple monorepo layout with two apps:
+A monorepo with two apps:
 
-- **`frontend/`** — Vite + React SPA
-  - React Router for pages
-  - TanStack React Query for server state
-  - TailwindCSS + shadcn/ui for UI components
-- **`backend/`** — Async FastAPI API
-  - SQLAlchemy (async) + Alembic migrations
-  - Postgres for persistence
-  - S3-compatible object storage (MinIO in local dev) for uploads
-  - Local-first RAG index persisted to disk (`.rag_store/` by default)
+- **`frontend/`** — Vite + React 18 SPA
+  - React Router (custom page resolver) · TanStack Query for server state
+  - TailwindCSS + shadcn/ui (Radix) · `react-markdown` + KaTeX for answers/summaries with math · framer-motion
+- **`backend/`** — Async FastAPI
+  - SQLAlchemy (async) + Alembic
+  - **Postgres** for persistence **and** retrieval — `pgvector` (vector search) + `pg_textsearch` (BM25), both built into the bundled Postgres image
+  - **Amazon S3** for uploads (MinIO available locally)
+  - **ffmpeg** for audio/thumbnail extraction; **Runpod** serverless (faster-whisper) for transcription
+  - **DSPy** (+ LangChain) for the AI pipelines (chat cascade, chapterization, summaries)
 
 ### Request flow (high level)
 
-1. Frontend boots and fetches a CSRF cookie (`GET /api/v1/auth/csrf`).
-2. Authenticated requests are cookie-based (`credentials: "include"`).
-3. Unsafe requests (POST/PUT/PATCH/DELETE) include `X-CSRF-Token`.
-4. The frontend has a conservative refresh-on-401 retry for non-auth endpoints.
+1. Frontend fetches a CSRF cookie (`GET /api/v1/auth/csrf`) on boot.
+2. Authenticated requests are cookie-based (`credentials: "include"`); unsafe methods include `X-CSRF-Token`.
+3. The client retries once on a 401 by calling `/auth/refresh` (non-auth endpoints only).
+4. Chat answers stream over SSE; the UI renders status, thinking, citations, and answer tokens as they arrive.
+
+**For the video-processing and retrieval pipelines in depth (with diagrams), see [`docs/architecture.md`](docs/architecture.md).**
 
 ---
 
@@ -70,150 +69,120 @@ This repo uses a simple monorepo layout with two apps:
 
 ### Prerequisites
 
-- **Node.js** (for the frontend)
-- **Python 3.12+** recommended (for the backend)
-- **uv** (Python package manager)
-- **Docker** (recommended for local Postgres + MinIO)
+- **Node.js** (frontend)
+- **Python 3.12+** and **uv** (backend)
+- **Docker** (local Postgres + MinIO)
+- **ffmpeg / ffprobe** on `PATH` (audio + thumbnail extraction)
+- **A Runpod faster-whisper endpoint** (only needed to transcribe videos)
+- API keys as needed (see [LLM configuration](#llm-configuration))
 
-### 1) Backend setup
+### 1) Backend
 
 ```bash
 cd backend
+cp env.example .env
 uv sync
-```
-
-Start Postgres + MinIO:
-
-```bash
-cd backend
-docker compose up -d
-```
-
-Notes:
-
-- Postgres is exposed on **localhost:5433** (container port 5432).
-- MinIO S3 API is on **localhost:9000** and console UI is on **localhost:9001**.
-
-Run migrations:
-
-```bash
-cd backend
+docker compose up -d        # Postgres (localhost:5433) + MinIO (localhost:9000 / console :9001)
 uv run alembic upgrade head
+./run.sh                    # API on :3001 (auto-reload). Override with PORT=4000 ./run.sh
 ```
 
-Start the API (default port **3001**):
+Health checks: `GET /health`, `GET /health/db`.
 
-```bash
-cd backend
-uv run uvicorn app.main:app --reload --host 0.0.0.0 --port ${PORT:-3001}
-```
+The bundled Postgres image enables **pgvector** and **pg_textsearch**; MinIO auto-creates a `classmate` bucket. (From the repo root, `npm run dev:backend` is equivalent to `./run.sh`.)
 
-Health checks:
-
-- `GET /health`
-- `GET /health/db`
-
-### 2) Frontend setup
+### 2) Frontend
 
 ```bash
 cd frontend
 npm install
+cp env.example .env.local   # set VITE_API_URL=http://localhost:3001, VITE_CHAT_ENABLED=true
+npm run dev                 # Vite on :5173
 ```
 
-Configure env:
+`VITE_CHAT_ENABLED=true` enables the course-chat composer (the in-lecture chat is always enabled). `VITE_UPLOAD_MAX_SIZE_MB` is a UI hint only — the backend enforces the real limit via `UPLOAD_MAX_SIZE_BYTES`.
 
-- Copy `frontend/env.example` to `frontend/.env.local` (or `frontend/.env`)
-- Set:
-  - `VITE_API_URL=http://localhost:3001`
-  - `VITE_CHAT_ENABLED=true` (enables the UI chat input; backend chat requires a Gemini API key)
+### 3) Convenience scripts (repo root)
 
-Configure backend chat keys (optional, only needed for chat replies):
-
-- Set `GOOGLE_API_KEY` in `backend/.env`
-
-Start the frontend (Vite default port **5173**):
-
-```bash
-cd frontend
-npm run dev
-```
-
-### 3) Convenience scripts (from repo root)
-
-```bash
-npm run dev:frontend
-npm run dev:backend
-```
+`npm run dev:frontend` · `npm run dev:backend` · `build:frontend` · `lint:frontend` · `install:backend` (see root `package.json`).
 
 ---
 
-## Configuration notes (dev)
+## LLM configuration
 
-- **CORS**: set `CORS_ORIGINS` in `backend/.env` to the exact Vite origin (e.g. `http://localhost:5173`).
-- **Host consistency**: prefer `localhost` everywhere (don’t mix `localhost` and `127.0.0.1`) or cookie auth can break.
-- **MinIO/S3**:
-  - MinIO S3 API: `http://localhost:9000`
-  - MinIO console: `http://localhost:9001`
-  - Bucket is created automatically as `classmate` by `minio-init` in `backend/docker-compose.yml`.
+ClassMate uses **three model providers**, configured in `backend/.env`:
+
+| Use | Provider | Default model | Key |
+|-----|----------|---------------|-----|
+| Chat (router, clarify, answer, title) | Anthropic | `claude-haiku-4-5` | `ANTHROPIC_API_KEY` |
+| Chat (retrieval query, cited answer), lecture summary | Anthropic | `claude-sonnet-4-6` | `ANTHROPIC_API_KEY` |
+| Chapters, course summary | Gemini | `gemini-2.5-flash` | `GOOGLE_API_KEY` |
+| Retrieval embeddings | OpenAI | `text-embedding-3-small` (1536-dim) | `OPENAI_API_KEY` |
+
+**How provider selection works:**
+
+- `LLM_PROVIDER` (default `gemini`) sets the global/fallback chat model — `gemini` (dev) or `anthropic` (prod switch).
+- `MODEL_ROLES_ENABLED` (default `true`) tiers each pipeline step by job per the table above (mapping lives in `app/ai/model_roles.py`). **Any tier whose provider key is unset falls back to the global `LLM_PROVIDER` model.** So a dev box with only `GOOGLE_API_KEY` runs the whole chat pipeline on Gemini Flash — it works, but the per-task tiering only fully applies when all three keys are set.
+- **Embeddings are independent of the chat provider.** Without `OPENAI_API_KEY`, transcripts are still indexed for lexical (BM25) search, but the vector leg is skipped (the lecture is marked `done_no_embeddings`). The 1536-dim is fixed in the pgvector schema; changing embedding models to another dimension needs a migration + reindex.
+
+**Other AI flags:**
+
+- `CHAPTERS_ENABLED` (default `false`) — when off, each lecture gets a single "Full Lecture" chapter with no LLM call. Turn on for real semantic chapters.
+- `DSPY_TRACING_ENABLED` (default `false`) — dev-only MLflow autolog for DSPy (needs the `mlflow` dev dependency).
 
 ---
 
-## RAG: indexing and debugging (dev)
+## Configuration notes
 
-RAG is **per-course** and stores a persisted Chroma index under:
+- **Object storage is Amazon S3.** Set `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION`; leave `S3_ENDPOINT_URL` empty to target AWS. For fully-local dev, set `S3_ENDPOINT_URL=http://localhost:9000` to use the bundled MinIO (console at `:9001`; default creds `minioadmin` / `minioadmin`).
+- **Upload size**: `UPLOAD_MAX_SIZE_BYTES` is small by default — **raise it for real lecture videos** (and keep the frontend's `VITE_UPLOAD_MAX_SIZE_MB` hint in sync).
+- **CORS**: set `CORS_ORIGINS` to the exact Vite origin (e.g. `http://localhost:5173`); cookie auth can't use a wildcard.
+- **Host consistency**: prefer `localhost` everywhere (don't mix with `127.0.0.1`) or cookie auth can break.
+- **DB port**: the Docker Postgres is published on **5433**; point `DATABASE_URL` at `127.0.0.1:5433` (as in `env.example`).
 
-- `backend/.rag_store/users/{userId}/courses/{courseId}/` (by default; configurable via `RAG_STORE_DIR`)
+---
 
-### How indexing works
+## API surface (v1)
 
-- **Upload flow**:
-  - Frontend requests a presigned URL: `POST /api/v1/uploads/presign`
-  - Browser uploads directly to S3/MinIO via the presigned `PUT`
-  - Frontend creates the content record with `file_key` + file metadata: `POST /api/v1/courses/{courseId}/contents`
-- **Indexing trigger**: when a content item with `file_key` is created and `RAG_ENABLED=true`, the backend schedules indexing in-process via `BackgroundTasks`.
-- **Currently indexed formats**: PDFs only (text is extracted with `pypdf` and chunked; no OCR).
+All routes are under `/api/v1` and require cookie auth unless noted. The canonical client flows are marked; a few raw endpoints exist as escape hatches.
 
-### Requirements
-
-- **S3 configured** (at minimum `S3_BUCKET`), because indexing fetches the uploaded PDFs from object storage.
-- **Embeddings configured**:
-  - **Gemini embeddings (default)**: set `GOOGLE_API_KEY` and ensure quota/billing allows embeddings.
-  - **Local embeddings**: set `RAG_EMBEDDINGS_PROVIDER=hf` (uses `sentence-transformers`, downloads the model on first run).
-
-### Debug endpoints
-
-- `GET /api/v1/courses/{courseId}/rag/status` — sanity info (enabled, index exists, PDF count, etc.)
-- `POST /api/v1/courses/{courseId}/rag/reindex` — rebuild/refresh the index in the background
-- `GET /api/v1/courses/{courseId}/rag/query?q=...&top_k=4` — retrieval-only debug (no LLM)
-- `POST /api/v1/courses/{courseId}/rag/clear` — dev helper: delete the on-disk index for the course
+- **Auth** (public): `GET /auth/csrf`, `POST /auth/{login,signup,refresh,logout}`
+- **Users**: `GET /users/me`, `DELETE /users/me`
+- **Courses**: `GET|POST /courses`, `GET|DELETE /courses/{id}`
+- **Lectures (video)**: `POST /courses/{id}/videos` *(canonical: atomic content+asset, optional transcription kickoff)*, `GET /courses/{id}/video-assets`, `GET /video-assets/{id}`, `.../segments`, `.../chapters`, `.../summary`, `POST /video-assets/{id}/transcribe` *(start/retry)*
+- **Uploads**: `POST /uploads/presign` *(presigned PUT; rejects non-`video/*`)*
+- **Chat**: `POST /courses/{id}/chat-v2` *(non-streaming)*, `POST /courses/{id}/chat-v2/stream` *(SSE)*
+- **Conversations**: `GET /courses/{id}/conversations[?video_asset_id=]`, `GET /conversations/{id}/messages`, `DELETE /conversations/{id}`
+- **Retrieval debug** (read-only): `GET /courses/{id}/rag/status`, `.../rag/query` *(semantic)*, `.../rag/lexical_query` *(BM25)*
 
 ---
 
 ## Tests
 
-Backend tests live in `backend/tests/` and cover core flows (auth, courses, chat contract, migrations, validation guards).
+Backend tests live in `backend/tests/` (36 files) covering auth, courses, the video assets API and S3 cleanup, the chat-v2 SSE/streaming/thinking/citations contract, viewing-context and per-lecture conversations, hybrid/explicit/Postgres retrieval, the (mocked) transcription pipeline, chapters, lecture artifacts, course summary/info, migrations, validation guards, and model-role resolution.
 
 ```bash
 cd backend
 uv run pytest
 ```
 
+DB-backed tests run against a `<db>_test` database (auto-created + migrated by `tests/conftest.py`); if Postgres is unreachable, those tests skip themselves so the suite still runs.
+
 ---
 
-## Roadmap (planned)
+## Roadmap
 
-- **Richer citations UI**: show citations in the chat UI (and deep-link to downloads/pages).
-- **More file types**: ingestion beyond PDFs (DOCX/PPTX, plaintext notes, etc.).
-- **Better PDF understanding**: OCR for scanned slides, layout-aware chunking, improved metadata extraction.
-- **Background workers**: move indexing out of request process (queue + worker) for large courses.
-- **Richer course material understanding**: lecture segmentation, timestamped references, metadata extraction.
-- **Multilingual support** and improved search/discovery across content.
+- **Index more than transcripts**: bring uploaded PDFs / slides / notes (DOCX/PPTX, plaintext) into the retrieval corpus, with OCR for scanned slides and layout-aware chunking.
+- **Surface chapters in the player UI** and enable semantic chapterization by default.
+- **Persist model reasoning** so the "thinking" panel survives reloads.
+- **Move processing to a real worker/queue** (out of the request process) for large courses, with rate limiting.
+- **Multilingual support** and improved cross-lecture search/discovery.
 
 ---
 
 ## Project structure (quick map)
 
-- `frontend/` — React app (pages in `frontend/src/pages/`, API client in `frontend/src/api/`)
-- `backend/` — FastAPI app (routes in `backend/app/api/v1/`, models in `backend/app/db/models/`, migrations in `backend/alembic/`)
+- `frontend/` — React app: pages in `src/pages/` (Courses, CourseOverview, CourseContent, VideoPlayer, CourseChat); API client in `src/api/` (`chatStream.js` for SSE, `videoAssets.js`); chat UI in `src/components/chat/`.
+- `backend/` — FastAPI app: routes in `app/api/v1/`; AI pipelines in `app/ai/` (DSPy chat/chapters, teaching assistant, summaries); retrieval in `app/rag/` (hybrid / pgvector / explicit); services in `app/services/` (transcription, chapters, lecture artifacts, citations); models in `app/db/models/`; migrations in `alembic/`.
 
-For backend-specific notes (DB, Docker, seeding users), see `backend/README.md`.
+For backend setup specifics, see [`backend/README.md`](backend/README.md).
