@@ -18,9 +18,9 @@ async def build_conversation_history(
     """Load the last `max_n` `ChatMessage` rows for a conversation and return a
     `ConversationHistory` with chronological order (oldest -> newest).
 
-    Mirrors the load pattern in `app/api/v1/chat.py:course_chat` so the new
-    pipeline and the legacy endpoint converge on the same definition of
-    "conversation history".
+    Centralizes the definition of "conversation history" used by the chat
+    pipeline (it previously mirrored the load pattern in the now-removed v1
+    `course_chat` endpoint).
 
     Intended to be called BEFORE persisting the current user message, so the
     returned history does not include it. The TeachingAssistant receives the

@@ -4,7 +4,6 @@ import re
 
 import dspy
 
-from app.ai.llm import build_lm
 from app.ai.model_roles import TITLE, build_lm_for_role
 from app.core.settings import Settings
 
@@ -142,53 +141,12 @@ def _derive_title_from_message(message: str) -> str | None:
     return final[:80] if final else None
 
 
-class _ReplySig(dspy.Signature):
-    """Answer the user's question. If provided, use course excerpts and cite them as [#]."""
-
-    system_prompt: str = dspy.InputField()
-    history: str = dspy.InputField(desc="Conversation history, most recent last")
-    rag_context: str = dspy.InputField(desc="Retrieved course excerpts with [#] labels. May be empty.")
-    user_message: str = dspy.InputField()
-
-    answer: str = dspy.OutputField(
-        desc=(
-            "Helpful answer. If you use retrieved excerpts, cite them by [#]. "
-            "If excerpts are insufficient, say so and ask a clarifying question."
-        )
-    )
-
-
 class _TitleSig(dspy.Signature):
     """Return ONLY a concise 3–5 word title, no quotes/punctuation."""
 
     course_name: str = dspy.InputField()
     first_user_message: str = dspy.InputField()
     title: str = dspy.OutputField()
-
-
-def generate_reply_dspy(
-    *,
-    settings: Settings,
-    system_prompt: str,
-    history: str,
-    rag_context: str,
-    user_message: str,
-) -> str:
-    # Configure LM per-call (important in async servers).
-    lm = build_lm(
-        settings,
-        temperature=float(settings.chat_temperature),
-        max_tokens=900,
-    )
-    pred = dspy.Predict(_ReplySig)
-    with dspy.settings.context(lm=lm):
-        out = pred(
-            system_prompt=(system_prompt or "").strip(),
-            history=(history or "").strip(),
-            rag_context=(rag_context or "").strip(),
-            user_message=(user_message or "").strip(),
-        )
-    return (getattr(out, "answer", "") or "").strip()
 
 
 def generate_title_dspy(*, settings: Settings, course_name: str, first_user_message: str) -> str:

@@ -4,21 +4,21 @@ import asyncio
 from pathlib import Path
 from uuid import uuid4
 
-import httpx
 import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.core.security import hash_password
 from app.core.settings import get_settings
 from app.db.models.course import Course
 from app.db.models.course_content import CourseContent
 from app.db.models.user import User
 from app.db.models.video_asset import VideoAsset
 from app.db.models.video_chapter import VideoChapter
-from app.main import app
+from app.core.security import hash_password
+from app.schemas.chat import ChatCitation
+from app.services.chat_citations import attach_video_chapter_titles
 
 
 def _run_migrations_sync() -> None:
@@ -41,20 +41,22 @@ async def _can_connect(database_url: str) -> bool:
 
 
 @pytest.mark.asyncio
-async def test_course_chat_attaches_chapter_title_from_chapter_id(monkeypatch) -> None:
+async def test_attach_video_chapter_titles_resolves_from_chapter_id() -> None:
+    """`attach_video_chapter_titles` should fill `chapterTitle` from the
+    `video_chapters` table given a video citation carrying a `chapterId`.
+
+    This is the helper the live v2 chat endpoint uses to enrich citations; the
+    test exercises it directly against a real DB instead of through an endpoint.
+    """
     settings = get_settings()
 
     if not await _can_connect(settings.database_url):
         pytest.skip("Database not reachable. Start Postgres (backend/docker-compose.yml).")
 
-    # Setup DB entities.
     await asyncio.to_thread(_run_migrations_sync)
     engine = create_async_engine(settings.database_url, pool_pre_ping=True)
     SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        from app.api.v1 import chat as chat_api
-        from app.schemas.chat import ChatCitation
-
         async with SessionLocal() as session:
             user = User(email=f"u-{uuid4()}@e.com", hashed_password=hash_password("pw"), display_name="T")
             session.add(user)
@@ -96,41 +98,19 @@ async def test_course_chat_attaches_chapter_title_from_chapter_id(monkeypatch) -
             await session.commit()
             await session.refresh(chapter)
 
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            csrf = await client.get("/api/v1/auth/csrf")
-            token = csrf.json()["csrfToken"]
-
-            login = await client.post(
-                "/api/v1/auth/login",
-                json={"email": user.email, "password": "pw"},
-                headers={settings.csrf_header_name: token},
+            citation = ChatCitation(
+                content_id=content.id,
+                title=None,
+                url=None,
+                snippet="snippet",
+                extra={"type": "video", "startSec": 0, "endSec": 10, "chapterId": str(chapter.id)},
             )
-            assert login.status_code == 200
 
-            # Call chat; patch citation to point to correct content_id + chapterId.
-            async def _mock_generate_reply2(self, **kwargs):  # noqa: ANN001
-                c = ChatCitation(
-                    content_id=content.id,
-                    title=None,
-                    url=None,
-                    snippet="snippet",
-                    extra={"type": "video", "startSec": 0, "endSec": 10, "chapterId": str(chapter.id)},
-                )
-                return "reply [1]", [c]
-
-            chat_api.ChatEngine.generate_reply = _mock_generate_reply2  # type: ignore[method-assign]
-
-            r = await client.post(
-                f"/api/v1/courses/{course.id}/chat",
-                json={"message": "hi"},
-                headers={settings.csrf_header_name: token},
+            result = await attach_video_chapter_titles(
+                db=session, course_id=course.id, citations=[citation]
             )
-            assert r.status_code == 200
-            body = r.json()
-            assert body["citations"]
-            extra = body["citations"][0]["extra"]
-            assert extra.get("chapterTitle") == "Full Lecture"
+
+            assert result[0].extra is not None
+            assert result[0].extra.get("chapterTitle") == "Full Lecture"
     finally:
         await engine.dispose()
-

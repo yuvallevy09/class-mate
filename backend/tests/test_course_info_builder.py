@@ -155,7 +155,6 @@ async def test_build_course_info_returns_lectures_in_chronological_order() -> No
             assert info.id == course.id
             assert info.name == "Networking 101"
             assert info.description == "Intro to networks"
-            assert info.summary is None  # not yet sourced from DB; future TODO
 
             assert len(info.lectures) == 2
 

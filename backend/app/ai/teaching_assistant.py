@@ -186,8 +186,8 @@ class TeachingAssistantResult(BaseModel):
     """Structured output for one chat turn.
 
     The endpoint uses `retrieved_docs` to build `ChatCitation`s (the existing
-    `_attach_citation_urls` / `_attach_video_chapter_titles` helpers in
-    `app/api/v1/chat.py` already accept the same metadata shape) and
+    `attach_citation_urls` / `attach_video_chapter_titles` helpers in
+    `app/services/chat_citations.py` already accept the same metadata shape) and
     `retrieval_path` is handy for analytics and debugging.
 
     `debug` carries non-user-facing diagnostics: `ChainOfThought` reasoning

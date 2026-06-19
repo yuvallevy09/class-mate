@@ -118,10 +118,6 @@ class Settings(BaseSettings):
     # Requires the `mlflow` dev dependency; ignored in production installs without it.
     dspy_tracing_enabled: bool = Field(default=False, validation_alias="DSPY_TRACING_ENABLED")
 
-    # DSPy router (intent routing for retrieval vs general answering).
-    # Uses the configured LLM provider (see llm_provider above).
-    dspy_router_enabled: bool = Field(default=False, validation_alias="DSPY_ROUTER_ENABLED")
-
     # JWT / cookies
     jwt_secret: str = Field(default="dev-change-me", validation_alias="JWT_SECRET")
     jwt_access_ttl_seconds: int = Field(default=900, validation_alias="JWT_ACCESS_TTL_SECONDS")

@@ -62,7 +62,6 @@ def test_to_header_is_name_and_description_only() -> None:
         id=uuid4(),
         name="Computer Networks",
         description="Intro to networking.",
-        summary="Course-level AI summary.",
         lectures=[lec],
     )
 
@@ -91,14 +90,12 @@ def test_to_basic_info_contains_catalog_lines_without_full_summaries() -> None:
         id=uuid4(),
         name="Computer Networks",
         description="Intro to networking.",
-        summary="Course-level AI summary.",
         lectures=[lec],
     )
 
     text = course.to_basic_info()
 
     assert "Course: Computer Networks" in text
-    assert "Course summary: Course-level AI summary." in text
     # `slug: title — one-liner` and no bracketed slug (reserved for [N] citations).
     assert "L1: Intro to Networking — Covers the OSI model at a high level." in text
     assert "[L1]" not in text

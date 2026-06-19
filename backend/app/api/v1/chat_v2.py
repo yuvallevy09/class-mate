@@ -1,9 +1,8 @@
-"""Experimental v2 chat endpoint backed by the new `TeachingAssistant` pipeline.
+"""The chat endpoint, backed by the routed `TeachingAssistant` pipeline.
 
-Lives alongside `course_chat` (v1) so we can validate the routed cascade on
-real traffic without risk. The frontend opts in by hitting `/chat-v2`. Once
-this proves itself we delete the v1 endpoint and the legacy `ChatEngine`
-machinery.
+The frontend hits `/chat-v2` for every turn. This superseded a simpler v1
+`course_chat` endpoint (now removed); the only piece of the old path still in
+use is `ChatEngine.generate_title` for naming new conversations.
 
 Pipeline:
 
@@ -61,11 +60,11 @@ from app.ai.stream_events import (
 )
 from app.ai.teaching_assistant import TeachingAssistant, get_teaching_assistant
 from app.api.deps import get_current_user
-from app.api.v1.chat import (
-    _attach_citation_urls,
-    _attach_video_chapter_titles,
-    _ensure_owned_course,
-    _format_reply_with_citation_links,
+from app.services.chat_citations import (
+    attach_citation_urls,
+    attach_video_chapter_titles,
+    ensure_owned_course,
+    format_reply_with_citation_links,
 )
 from app.core.settings import Settings, get_settings
 from app.db.models.chat_conversation import ChatConversation
@@ -192,9 +191,9 @@ _TS_MARKER_RE = re.compile(r"\[\d{1,3}:\d{2}(?::\d{2})?\]\s*")
 def _docs_to_citations(docs: list[RetrievedDoc]) -> list[ChatCitation]:
     """Map retrieved docs into the `ChatCitation` shape the frontend already renders.
 
-    The `extra` dict mirrors what `ChatEngine` emits in v1 so the existing
-    `_attach_citation_urls` / `_attach_video_chapter_titles` /
-    `_format_reply_with_citation_links` helpers work unchanged. We also stash
+    The `extra` dict matches the metadata shape the shared citation helpers
+    expect, so `attach_citation_urls` / `attach_video_chapter_titles` /
+    `format_reply_with_citation_links` helpers work unchanged. We also stash
     `lectureSlug` so `_normalize_slug_citations` can recover when the LLM
     cites by slug (`[L1]`) instead of by number (`[1]`).
     """
@@ -228,7 +227,7 @@ def _docs_to_citations(docs: list[RetrievedDoc]) -> list[ChatCitation]:
 # Match anything between brackets that isn't already a pure-digit citation
 # the downstream regex handles. Length cap keeps us from eating big inline
 # markdown like `[click here](url)` (those have `]` followed by `(`, but the
-# cap is still useful defense). Note: the existing `_format_reply_with_citation_links`
+# cap is still useful defense). Note: the existing `format_reply_with_citation_links`
 # regex runs AFTER this and only touches `[<digits>]`, so we deliberately
 # rewrite slug citations into the canonical `[N]` form.
 _SLUG_CITATION_RE = re.compile(r"\[([^\]\n]{1,30})\]")
@@ -240,7 +239,7 @@ def _normalize_slug_citations(reply: str, citations: list[ChatCitation]) -> str:
     The `AnswerFromContext` prompt is explicit that citations must be numeric
     (`[1]`, `[2]`), but smaller / faster models still occasionally echo back
     the lecture slug they see in `course_info` (`[L1]`). The digit-only regex
-    in `_format_reply_with_citation_links` would leave those as plain text.
+    in `format_reply_with_citation_links` would leave those as plain text.
 
     This pass walks every `[...]` in the reply and, if the inside text matches
     a lecture slug we actually retrieved (case-insensitive, with an optional
@@ -311,7 +310,7 @@ async def course_chat_v2(
     settings: Settings = Depends(get_settings),
     ta: TeachingAssistant = Depends(get_teaching_assistant),
 ) -> CourseChatResponse:
-    course = await _ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
+    course = await ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
 
     # --- Conversation lookup / create ---
     conversation: ChatConversation | None = None
@@ -418,16 +417,16 @@ async def course_chat_v2(
 
     # --- Citations: map -> enrich -> inline links ---
     citations = _docs_to_citations(retrieved_docs)
-    citations = await _attach_citation_urls(
+    citations = await attach_citation_urls(
         db=db, settings=settings, course_id=course.id, citations=citations
     )
-    citations = await _attach_video_chapter_titles(
+    citations = await attach_video_chapter_titles(
         db=db, course_id=course.id, citations=citations
     )
     # Defensive: recover `[L1]`-style slug citations into `[N]` form before
     # the digit-only post-processor builds the in-page links.
     normalized_answer = _normalize_slug_citations(answer_text, citations)
-    reply_with_links = _format_reply_with_citation_links(normalized_answer, citations)
+    reply_with_links = format_reply_with_citation_links(normalized_answer, citations)
 
     # Computed once: persisted with the message AND returned for the live turn.
     thinking = _build_thinking(
@@ -526,7 +525,7 @@ async def _persist_assistant_message(
     the `CitationsEvent`, to send them before the answer).
     """
     normalized = _normalize_slug_citations(answer, citations)
-    reply_with_links = _format_reply_with_citation_links(normalized, citations)
+    reply_with_links = format_reply_with_citation_links(normalized, citations)
     db.add(
         ChatMessage(
             conversation_id=conversation_id,
@@ -557,7 +556,7 @@ async def course_chat_v2_stream(
 ) -> StreamingResponse:
     # --- Pre-stream work on the request session (closes before the generator
     # runs). All HTTPExceptions fire here, as normal JSON errors. ---
-    course = await _ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
+    course = await ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
 
     conversation: ChatConversation | None = None
     created_new_conversation = False
@@ -643,11 +642,11 @@ async def course_chat_v2_stream(
                         # deltas (astream guarantees Citations precedes Answer).
                         cites = _docs_to_citations(ev.docs)
                         async with SessionLocal() as enrich_db:
-                            cites = await _attach_citation_urls(
+                            cites = await attach_citation_urls(
                                 db=enrich_db, settings=settings,
                                 course_id=captured_course_id, citations=cites,
                             )
-                            cites = await _attach_video_chapter_titles(
+                            cites = await attach_video_chapter_titles(
                                 db=enrich_db, course_id=captured_course_id, citations=cites,
                             )
                         enriched_citations = cites

@@ -8,7 +8,7 @@ from app.api.v1 import (
     courses,
     course_contents,
     uploads,
-    chat,
+    conversations,
     chat_v2,
     rag,
     video_assets,
@@ -20,7 +20,7 @@ api_router.include_router(users.router)
 api_router.include_router(courses.router)
 api_router.include_router(course_contents.router)
 api_router.include_router(uploads.router)
-api_router.include_router(chat.router)
+api_router.include_router(conversations.router)
 api_router.include_router(chat_v2.router)
 api_router.include_router(rag.router)
 api_router.include_router(video_assets.router)
