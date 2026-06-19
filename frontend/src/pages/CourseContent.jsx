@@ -297,7 +297,7 @@ export default function CourseContent() {
   const courseId = urlParams.get("courseId");
   const category = urlParams.get("category");
   const isVideosPage = category === "media";
-  const videoUploadMaxSizeMb = Number(import.meta.env.VITE_UPLOAD_MAX_SIZE_MB) || 100;
+  const videoUploadMaxSizeMb = Number(import.meta.env.VITE_UPLOAD_MAX_SIZE_MB) || 1024;
   // Human-friendly label: show GB once we're at/above 1024MB, otherwise MB.
   const videoUploadMaxSizeLabel =
     videoUploadMaxSizeMb >= 1024

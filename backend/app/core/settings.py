@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     s3_audio_presign_expires_seconds: int = Field(
         default=3600, validation_alias="S3_AUDIO_PRESIGN_EXPIRES_SECONDS"
     )
-    upload_max_size_bytes: int = Field(default=26214400, validation_alias="UPLOAD_MAX_SIZE_BYTES")
+    upload_max_size_bytes: int = Field(default=1073741824, validation_alias="UPLOAD_MAX_SIZE_BYTES")  # 1 GiB
 
     # ffmpeg (video -> audio/thumbnail)
     ffmpeg_bin: str = Field(default="ffmpeg", validation_alias="FFMPEG_BIN")

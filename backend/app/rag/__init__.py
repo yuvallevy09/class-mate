@@ -1,3 +1,3 @@
-"""Local-first RAG utilities (per-course Chroma persistence)."""
+"""RAG utilities: hybrid (BM25 + pgvector) retrieval over the Postgres corpus."""
 
 

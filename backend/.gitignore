@@ -8,4 +8,7 @@ __pycache__/
 dist/
 build/
 
+# Legacy local RAG index (Chroma). Retrieval now lives in Postgres/pgvector.
+.rag_store/
+
 
