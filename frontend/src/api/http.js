@@ -11,7 +11,7 @@ export function getApiBaseUrl() {
   return (typeof v === "string" && v.trim()) ? v.trim() : DEFAULT_API_URL;
 }
 
-export function getCookie(name) {
+function getCookie(name) {
   if (typeof document === "undefined") return null;
   const parts = document.cookie ? document.cookie.split("; ") : [];
   for (const part of parts) {
@@ -23,7 +23,7 @@ export function getCookie(name) {
   return null;
 }
 
-export function getCsrfFromCookie() {
+function getCsrfFromCookie() {
   return getCookie("csrf_token");
 }
 

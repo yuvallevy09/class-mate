@@ -39,3 +39,6 @@ dist-ssr
 backend/mlruns/
 backend/mlartifacts/
 backend/mlflow.db
+# Python bytecode cache
+__pycache__/
+*.pyc
