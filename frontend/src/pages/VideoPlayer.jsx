@@ -27,6 +27,7 @@ import { useAssistantTurn } from "@/hooks/useAssistantTurn";
 
 import Navbar from "@/components/Navbar";
 import CourseSidebar from "@/components/CourseSidebar";
+import { fmtTimestamp } from "@/components/chat/citations";
 import AssistantMessage from "@/components/chat/AssistantMessage";
 import ThinkingDisclosure from "@/components/chat/ThinkingDisclosure";
 import UserMessage from "@/components/chat/UserMessage";
@@ -34,13 +35,6 @@ import VideoConversationSwitcher from "@/components/chat/VideoConversationSwitch
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
-
-function fmtTimestamp(seconds) {
-  const s = Math.max(0, Number(seconds || 0));
-  const mm = Math.floor(s / 60);
-  const ss = Math.floor(s % 60);
-  return `${mm}:${String(ss).padStart(2, "0")}`;
-}
 
 function parseTimestampToSeconds(ts) {
   const t = String(ts || "").trim();

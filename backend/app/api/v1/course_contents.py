@@ -3,8 +3,6 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-import boto3
-from botocore.config import Config
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import RedirectResponse
@@ -13,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.core.s3 import s3_client
 from app.core.settings import Settings, get_settings
 from app.db.models.course import Course
 from app.db.models.course_content import CourseContent
@@ -20,31 +19,14 @@ from app.db.models.video_asset import VideoAsset
 from app.db.models.user import User
 from app.db.session import get_db
 from app.schemas.course_content import CourseContentCreate, CourseContentPublic
+from app.services.chat_citations import ensure_owned_course
 
 router = APIRouter(tags=["course-contents"])
 logger = logging.getLogger(__name__)
 
+
 class DownloadUrlResponse(BaseModel):
     url: str
-
-
-def _s3_client(settings: Settings):
-    kwargs: dict = {"service_name": "s3", "region_name": settings.s3_region}
-    if settings.s3_endpoint_url:
-        kwargs["endpoint_url"] = settings.s3_endpoint_url
-        kwargs["config"] = Config(s3={"addressing_style": "path"})
-    if settings.s3_access_key_id and settings.s3_secret_access_key:
-        kwargs["aws_access_key_id"] = settings.s3_access_key_id
-        kwargs["aws_secret_access_key"] = settings.s3_secret_access_key
-    return boto3.client(**kwargs)
-
-
-async def _get_owned_course(db: AsyncSession, *, course_id: UUID, user_id: int) -> Course:
-    res = await db.execute(select(Course).where(Course.id == course_id, Course.user_id == user_id))
-    course = res.scalar_one_or_none()
-    if course is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course not found")
-    return course
 
 
 @router.get("/courses/{course_id}/contents", response_model=list[CourseContentPublic])
@@ -54,7 +36,7 @@ async def list_course_contents(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[CourseContent]:
-    await _get_owned_course(db, course_id=course_id, user_id=current_user.id)
+    await ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
 
     stmt = select(CourseContent).where(CourseContent.course_id == course_id)
     if category:
@@ -90,7 +72,7 @@ async def create_course_content(
     current_user: User = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> CourseContent:
-    await _get_owned_course(db, course_id=course_id, user_id=current_user.id)
+    await ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
 
     if body.file_key and not settings.s3_bucket:
         raise HTTPException(
@@ -153,7 +135,7 @@ async def delete_course_content(
                 keys_to_delete.append(asset.audio_file_key)
 
     if keys_to_delete and settings.s3_bucket:
-        s3 = _s3_client(settings)
+        s3 = s3_client(settings)
         for key in keys_to_delete:
             try:
                 s3.delete_object(Bucket=settings.s3_bucket, Key=key)
@@ -196,7 +178,7 @@ async def get_download_url(
     if not content.file_key:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No file for this content")
 
-    s3 = _s3_client(settings)
+    s3 = s3_client(settings)
     url = s3.generate_presigned_url(
         ClientMethod="get_object",
         Params={"Bucket": settings.s3_bucket, "Key": content.file_key},
@@ -237,7 +219,7 @@ async def download_redirect(
     if not content.file_key:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No file for this content")
 
-    s3 = _s3_client(settings)
+    s3 = s3_client(settings)
     url = s3.generate_presigned_url(
         ClientMethod="get_object",
         Params={"Bucket": settings.s3_bucket, "Key": content.file_key},

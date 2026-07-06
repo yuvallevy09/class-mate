@@ -11,13 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.core.settings import Settings, get_settings
 from app.db.models.content_chunk import ContentChunk
-from app.db.models.course import Course
 from app.db.models.course_content import CourseContent
 from app.db.models.user import User
 from app.db.session import get_db
 from app.rag.embeddings import get_embeddings
 from app.rag.embedding_config import EMBEDDING_DIMS
 from app.rag.pg_retrieve import retrieve_course_chunk_hits
+from app.services.chat_citations import ensure_owned_course
 
 router = APIRouter(tags=["rag"])
 
@@ -43,14 +43,6 @@ class RagLexicalQueryResponse(BaseModel):
 class RagSemanticQueryResponse(BaseModel):
     hits: list[dict]
 
-async def _ensure_owned_course(db: AsyncSession, *, course_id: UUID, user_id: int) -> Course:
-    res = await db.execute(select(Course).where(Course.id == course_id, Course.user_id == user_id))
-    course = res.scalar_one_or_none()
-    if course is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course not found")
-    return course
-
-
 def _embeddings_configured(settings: Settings) -> bool:
     api_key = (getattr(settings, "openai_api_key", None) or "").strip()
     if not api_key:
@@ -69,7 +61,7 @@ async def rag_status(
     current_user: User = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> RagStatusResponse:
-    await _ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
+    await ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
 
     # Count file-backed contents for a quick sanity check.
     res = await db.execute(
@@ -114,7 +106,7 @@ async def rag_query(
     Debug endpoint: semantic retrieval only (no LLM) using pgvector cosine distance over
     `content_chunks.embedding`.
     """
-    await _ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
+    await ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
 
     if not settings.rag_enabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="RAG is disabled (RAG_ENABLED=false)")
@@ -202,7 +194,7 @@ async def rag_lexical_query(
     Debug endpoint: run lexical retrieval only (no LLM) using Postgres BM25 (pg_textsearch)
     over the `content_chunks` table.
     """
-    await _ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
+    await ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
 
     if not settings.rag_enabled:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="RAG is disabled (RAG_ENABLED=false)")

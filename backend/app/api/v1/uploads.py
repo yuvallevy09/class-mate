@@ -3,14 +3,13 @@ from __future__ import annotations
 import re
 from uuid import UUID, uuid4
 
-import boto3
-from botocore.config import Config
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.core.s3 import s3_client
 from app.core.settings import Settings, get_settings
 from app.db.models.course import Course
 from app.db.models.user import User
@@ -45,18 +44,6 @@ def _sanitize_filename(name: str) -> str:
         return "file"
     # Avoid absurdly long keys.
     return base[:120]
-
-
-def _s3_client(settings: Settings):
-    kwargs: dict = {"service_name": "s3", "region_name": settings.s3_region}
-    if settings.s3_endpoint_url:
-        kwargs["endpoint_url"] = settings.s3_endpoint_url
-        # MinIO/local S3 often doesn't support virtual-host bucket addressing on localhost.
-        kwargs["config"] = Config(s3={"addressing_style": "path"})
-    if settings.s3_access_key_id and settings.s3_secret_access_key:
-        kwargs["aws_access_key_id"] = settings.s3_access_key_id
-        kwargs["aws_secret_access_key"] = settings.s3_secret_access_key
-    return boto3.client(**kwargs)
 
 
 @router.post("/presign", response_model=PresignResponse)
@@ -108,7 +95,7 @@ async def presign_upload(
     safe_name = _sanitize_filename(body.filename)
     key = f"users/{current_user.id}/courses/{course.id}/{uuid4()}_{safe_name}"
 
-    s3 = _s3_client(settings)
+    s3 = s3_client(settings)
     upload_url = s3.generate_presigned_url(
         ClientMethod="put_object",
         Params={

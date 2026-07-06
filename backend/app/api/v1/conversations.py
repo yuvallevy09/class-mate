@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -17,7 +16,6 @@ from app.schemas.chat_persistence import ChatConversationPublic, ChatMessagePubl
 from app.services.chat_citations import ensure_owned_course
 
 router = APIRouter(tags=["conversations"])
-logger = logging.getLogger(__name__)
 
 
 @router.get("/courses/{course_id}/conversations", response_model=list[ChatConversationPublic])
