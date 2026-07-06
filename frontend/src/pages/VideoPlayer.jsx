@@ -155,6 +155,11 @@ export default function VideoPlayer() {
   const [isChatPopoutOpen, setIsChatPopoutOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSummaryExpanded, setIsSummaryExpanded] = useState(false);
+  // A freshly uploaded video can briefly 404 from S3 before the object is fully
+  // available (so the <video> errors and renders a blank box). We retry with a
+  // fresh presigned URL a few times and show a "preparing" overlay meanwhile.
+  const [isVideoPreparing, setIsVideoPreparing] = useState(false);
+  const [videoReloadNonce, setVideoReloadNonce] = useState(0);
 
   const messagesEndRef = useRef(null);
   const chatScrollRef = useRef(null);
@@ -162,6 +167,8 @@ export default function VideoPlayer() {
   const videoRef = useRef(null);
   const chatWasOpenRef = useRef(false);
   const initialSeekDoneRef = useRef(false);
+  const videoRetryCountRef = useRef(0);
+  const videoRetryTimerRef = useRef(null);
 
   const { data: content } = useQuery({
     queryKey: ["contentById", contentId],
@@ -169,7 +176,7 @@ export default function VideoPlayer() {
     enabled: !!contentId,
   });
 
-  const { data: download } = useQuery({
+  const { data: download, refetch: refetchDownload } = useQuery({
     queryKey: ["contentDownloadUrl", contentId],
     queryFn: () => getDownloadUrl(contentId),
     enabled: !!contentId,
@@ -216,6 +223,56 @@ export default function VideoPlayer() {
       return !hasSummary && processing ? 2000 : false;
     },
   });
+
+  // Reset the retry/preparing state whenever we switch to a different video.
+  useEffect(() => {
+    videoRetryCountRef.current = 0;
+    setIsVideoPreparing(false);
+    if (videoRetryTimerRef.current) {
+      clearTimeout(videoRetryTimerRef.current);
+      videoRetryTimerRef.current = null;
+    }
+    return () => {
+      if (videoRetryTimerRef.current) {
+        clearTimeout(videoRetryTimerRef.current);
+        videoRetryTimerRef.current = null;
+      }
+    };
+  }, [contentId]);
+
+  // The element loaded successfully — clear any "preparing" state.
+  const handleVideoLoaded = () => {
+    videoRetryCountRef.current = 0;
+    if (videoRetryTimerRef.current) {
+      clearTimeout(videoRetryTimerRef.current);
+      videoRetryTimerRef.current = null;
+    }
+    setIsVideoPreparing(false);
+  };
+
+  // The element failed to load (commonly a freshly uploaded object that S3 can't
+  // serve yet). Re-presign and remount the <video> a few times with backoff.
+  const MAX_VIDEO_RETRIES = 6;
+  const handleVideoError = () => {
+    if (!videoUrl || videoRetryTimerRef.current) return;
+    if (videoRetryCountRef.current >= MAX_VIDEO_RETRIES) {
+      setIsVideoPreparing(false);
+      return;
+    }
+    videoRetryCountRef.current += 1;
+    setIsVideoPreparing(true);
+    const delay = Math.min(8000, 1000 * 2 ** (videoRetryCountRef.current - 1));
+    videoRetryTimerRef.current = setTimeout(async () => {
+      videoRetryTimerRef.current = null;
+      // Fetch a fresh presigned URL, then force the element to re-attempt.
+      try {
+        await refetchDownload();
+      } catch {
+        /* the nonce bump below still re-attempts with the current URL */
+      }
+      setVideoReloadNonce((n) => n + 1);
+    }, delay);
+  };
 
   // Viewing context sent with each turn: the watched lecture + the live
   // playback head (read at send time, so it reflects where the student is now).
@@ -742,14 +799,24 @@ export default function VideoPlayer() {
               <div className={`relative w-full bg-black aspect-video lg:aspect-auto ${CARD_HEIGHT_CLASS}`}>
                 <video
                   ref={videoRef}
-                  key={videoUrl || "video"}
+                  key={`${videoUrl || "video"}#${videoReloadNonce}`}
                   controls
                   playsInline
                   className="w-full h-full"
                   src={videoUrl || undefined}
+                  onLoadedData={handleVideoLoaded}
+                  onError={handleVideoError}
                 >
                   Your browser does not support the video tag.
                 </video>
+                {isVideoPreparing && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70 text-center px-6">
+                    <Loader2 className="w-10 h-10 text-purple-400 animate-spin" />
+                    <p className="text-gray-300 text-sm">
+                      Preparing your video… this can take a moment right after uploading.
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
 

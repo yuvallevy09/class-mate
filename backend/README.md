@@ -2,7 +2,7 @@
 
 Async FastAPI backend using `pyproject.toml` + `uv`.
 
-For the video-processing and retrieval (RAG) pipelines with diagrams, see [`../docs/architecture.md`](../docs/architecture.md).
+For the architecture in depth (with diagrams), see [`../docs/`](../docs/README.md) — deep dives on data, video processing, the RAG/AI pipeline, streaming UX, and security.
 
 ## Prereqs
 

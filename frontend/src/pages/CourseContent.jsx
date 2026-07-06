@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getCourse } from "@/api/courses";
 import { listCourseContents, createCourseContent, deleteCourseContent, getDownloadUrl } from "@/api/courseContents";
@@ -397,6 +397,24 @@ export default function CourseContent() {
       return prev.filter((u) => !drop.has(u.id));
     });
   }, [videoAssetByContentId]);
+
+  // Uploads run in the browser: the file is PUT to S3 and only then finalized
+  // (which is what persists the content/video rows on the server). Until finalize
+  // lands, a refresh aborts the upload and the video is lost for good — so warn
+  // before unloading while any upload is still pre-persist (uploading/finalizing).
+  const hasUnsavedUpload = uploads.some(
+    (u) => u.phase === "uploading" || u.phase === "finalizing"
+  );
+  useEffect(() => {
+    if (!hasUnsavedUpload) return;
+    const handler = (e) => {
+      e.preventDefault();
+      // Required for the native confirmation prompt in some browsers.
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [hasUnsavedUpload]);
 
   // Live display state for a content item (video processing stage, thumbnail, etc.).
   const deriveContentState = (item) => {

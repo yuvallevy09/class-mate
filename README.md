@@ -61,7 +61,7 @@ A monorepo with two apps:
 3. The client retries once on a 401 by calling `/auth/refresh` (non-auth endpoints only).
 4. Chat answers stream over SSE; the UI renders status, thinking, citations, and answer tokens as they arrive.
 
-**For the video-processing and retrieval pipelines in depth (with diagrams), see [`docs/architecture.md`](docs/architecture.md).**
+**For the architecture in depth (with diagrams), see [`docs/`](docs/README.md) — five deep dives on data, video processing, the RAG/AI pipeline, streaming UX, and security.**
 
 ---
 
