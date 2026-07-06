@@ -156,7 +156,7 @@ async def test_transcription_pipeline_persists_segments(monkeypatch) -> None:
             return f"https://public-s3.example.test/{Params['Bucket']}/{Params['Key']}"
 
     stub_s3 = _StubS3()
-    monkeypatch.setattr(svc, "_s3_client", lambda _settings: stub_s3)
+    monkeypatch.setattr(svc, "s3_client", lambda _settings: stub_s3)
 
     # Stub ffmpeg extraction: just write a dummy wav file.
     def _fake_ffmpeg_extract_audio(*, ffmpeg_bin: str, video_path: Path, wav_path: Path) -> None:
@@ -256,7 +256,7 @@ async def test_transcription_pipeline_errors_on_empty_segments(monkeypatch) -> N
         def generate_presigned_url(self, *, ClientMethod, Params, ExpiresIn):
             return f"https://public-s3.example.test/{Params['Bucket']}/{Params['Key']}"
 
-    monkeypatch.setattr(svc, "_s3_client", lambda _settings: _StubS3())
+    monkeypatch.setattr(svc, "s3_client", lambda _settings: _StubS3())
 
     def _fake_ffmpeg_extract_audio(*, ffmpeg_bin: str, video_path: Path, wav_path: Path) -> None:
         wav_path.write_bytes(b"RIFF....WAVEfmt ")

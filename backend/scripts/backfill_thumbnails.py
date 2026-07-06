@@ -7,6 +7,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.core.s3 import s3_client
 from app.core.settings import get_settings
 
 # Import related models so SQLAlchemy can resolve mapper references (User/Course/etc).
@@ -14,7 +15,7 @@ from app.db.models.user import User  # noqa: F401
 from app.db.models.course import Course  # noqa: F401
 from app.db.models.course_content import CourseContent  # noqa: F401
 from app.db.models.video_asset import VideoAsset
-from app.services.transcription import _s3_client, extract_and_upload_thumbnail
+from app.services.transcription import extract_and_upload_thumbnail
 
 
 async def main() -> None:
@@ -25,7 +26,7 @@ async def main() -> None:
 
     engine = create_async_engine(settings.database_url, pool_pre_ping=True)
     SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
-    s3 = _s3_client(settings)
+    s3 = s3_client(settings)
 
     try:
         async with SessionLocal() as session:

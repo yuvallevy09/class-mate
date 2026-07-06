@@ -125,7 +125,7 @@ async def test_delete_content_deletes_s3_object(monkeypatch) -> None:
 
     import app.api.v1.course_contents as cc
 
-    monkeypatch.setattr(cc, "_s3_client", lambda _settings: _StubS3())
+    monkeypatch.setattr(cc, "s3_client", lambda _settings: _StubS3())
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

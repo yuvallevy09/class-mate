@@ -242,7 +242,7 @@ async def test_video_assets_auth_and_ownership(monkeypatch) -> None:
             def delete_object(self, *, Bucket, Key):
                 return {}
 
-        monkeypatch.setattr(course_contents_api, "_s3_client", lambda _settings: _StubS3())
+        monkeypatch.setattr(course_contents_api, "s3_client", lambda _settings: _StubS3())
 
         deleted = await client.delete(
             f"/api/v1/contents/{created_payload['content']['id']}",

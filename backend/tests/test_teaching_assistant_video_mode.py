@@ -15,7 +15,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.ai.stream_events import AnswerEvent, CitationsEvent, DoneEvent
+from app.ai.stream_events import CitationsEvent, DoneEvent
 from app.ai.teaching_assistant import (
     TeachingAssistant,
     _apply_soft_scope,
