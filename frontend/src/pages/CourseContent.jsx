@@ -88,6 +88,13 @@ const PROGRESS_SPEED = {
   transcribing: 0.05,
 };
 
+// The bar must never READ "100%" until the video is actually finished — while it's still
+// working we hold it strictly below the value that would round up to 100 (the number is
+// rendered with Math.round, so anything ≥ 99.5 would show 100). The card is retired the
+// moment the asset leaves the working states, so the bar simply never needs to display 100
+// itself; the honest ceiling while processing is 99%.
+const MAX_WORKING_PROGRESS = 99;
+
 const progressStorageKey = (key) => (key ? `vprog:${key}` : null);
 
 function readStoredProgress(key) {
@@ -151,7 +158,7 @@ function useSmoothProgress(phase, uploadPct, persistKey) {
       if (next < floor) next = floor;              // a later stage bumps the floor up
       if (next < cur) next = cur;                  // strictly monotonic
       if (ph !== "uploading") next = Math.min(next, ceil - 0.4); // leave the final step to the next stage
-      next = Math.min(next, 99.5);
+      next = Math.min(next, MAX_WORKING_PROGRESS);
 
       stateRef.current.value = next;
       setDisplay(next);
