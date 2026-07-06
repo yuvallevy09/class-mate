@@ -59,7 +59,12 @@ async def list_course_contents(
     stmt = select(CourseContent).where(CourseContent.course_id == course_id)
     if category:
         stmt = stmt.where(CourseContent.category == (category or "").strip())
-    stmt = stmt.order_by(CourseContent.created_at.desc())
+    # Tie-break on the primary key so the order is deterministic across queries.
+    # created_at is set by func.now() (transaction-start time), so videos uploaded
+    # in quick succession can share (or nearly share) a timestamp; without a unique
+    # tie-breaker PostgreSQL returns tied rows in arbitrary heap order, which can
+    # differ between the auto-refetch right after upload and a later manual refresh.
+    stmt = stmt.order_by(CourseContent.created_at.desc(), CourseContent.id.desc())
 
     res = await db.execute(stmt)
     return list(res.scalars().all())
