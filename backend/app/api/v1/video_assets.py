@@ -157,7 +157,12 @@ async def list_video_assets(
 ) -> list[VideoAssetPublic]:
     await _get_owned_course(db, course_id=course_id, user_id=current_user.id)
     res = await db.execute(
-        select(VideoAsset).where(VideoAsset.course_id == course_id).order_by(VideoAsset.created_at.desc())
+        # Deterministic tie-breaker (see list_course_contents): created_at comes from
+        # func.now() and can tie for near-simultaneous uploads, so we add id.desc()
+        # to keep the order stable across refetches.
+        select(VideoAsset)
+        .where(VideoAsset.course_id == course_id)
+        .order_by(VideoAsset.created_at.desc(), VideoAsset.id.desc())
     )
     assets = list(res.scalars().all())
     s3 = (
