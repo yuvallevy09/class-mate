@@ -10,11 +10,10 @@ import time
 from typing import Any, Iterable
 from uuid import UUID
 
-import boto3
 import httpx
-from botocore.config import Config
 from sqlalchemy import delete, select
 
+from app.core.s3 import s3_client
 from app.core.settings import Settings, get_settings
 from app.db.models.transcript_segment import TranscriptSegment
 from app.db.models.video_asset import VideoAsset
@@ -30,17 +29,6 @@ class Segment:
     start_sec: float
     end_sec: float
     text: str
-
-
-def _s3_client(settings: Settings):
-    kwargs: dict[str, Any] = {"service_name": "s3", "region_name": settings.s3_region}
-    if settings.s3_endpoint_url:
-        kwargs["endpoint_url"] = settings.s3_endpoint_url
-        kwargs["config"] = Config(s3={"addressing_style": "path"})
-    if settings.s3_access_key_id and settings.s3_secret_access_key:
-        kwargs["aws_access_key_id"] = settings.s3_access_key_id
-        kwargs["aws_secret_access_key"] = settings.s3_secret_access_key
-    return boto3.client(**kwargs)
 
 
 def _ffmpeg_extract_audio(*, ffmpeg_bin: str, video_path: Path, wav_path: Path) -> None:
@@ -283,7 +271,7 @@ def _runpod_status_output_error(payload: dict[str, Any]) -> tuple[str, dict[str,
 
 
 def _presign_get_object_url(settings: Settings, *, key: str, expires_seconds: int) -> str:
-    s3 = _s3_client(settings)
+    s3 = s3_client(settings)
     return s3.generate_presigned_url(
         ClientMethod="get_object",
         Params={"Bucket": settings.s3_bucket, "Key": key},
@@ -332,7 +320,7 @@ async def transcribe_video_asset(*, video_asset_id: UUID, requested_language: st
             asset.transcription_started_at = datetime.now(timezone.utc)
         await db.commit()
 
-        s3 = _s3_client(settings)
+        s3 = s3_client(settings)
         # In /runsync mode a single HTTP call blocks for the whole job, so the HTTP
         # timeout must cover the full transcription budget. In /run mode each call
         # returns quickly and the overall budget is enforced by poll_until_complete.
