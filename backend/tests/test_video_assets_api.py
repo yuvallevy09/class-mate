@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -14,7 +15,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.core.security import hash_password
 from app.core.settings import get_settings
 from app.db.models.course import Course
+from app.db.models.course_content import CourseContent
 from app.db.models.user import User
+from app.db.models.video_asset import VideoAsset
 from app.main import app
 import app.api.v1.video_assets as video_assets_api
 import app.api.v1.course_contents as course_contents_api
@@ -242,7 +245,7 @@ async def test_video_assets_auth_and_ownership(monkeypatch) -> None:
             def delete_object(self, *, Bucket, Key):
                 return {}
 
-        monkeypatch.setattr(course_contents_api, "_s3_client", lambda _settings: _StubS3())
+        monkeypatch.setattr(course_contents_api, "s3_client", lambda _settings: _StubS3())
 
         deleted = await client.delete(
             f"/api/v1/contents/{created_payload['content']['id']}",
@@ -252,5 +255,117 @@ async def test_video_assets_auth_and_ownership(monkeypatch) -> None:
 
         gone = await client.get(f"/api/v1/video-assets/{asset['id']}")
         assert gone.status_code == 404
+
+
+async def _seed_videos_with_same_created_at(
+    database_url: str, *, course_id: UUID, count: int
+) -> list[UUID]:
+    """
+    Insert `count` media contents + linked video assets that all share the exact
+    same created_at, mirroring a burst of near-simultaneous uploads where
+    func.now() (transaction-start time) ties. Returns the content ids created.
+    """
+    engine = create_async_engine(database_url, pool_pre_ping=True)
+    SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+    tied = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    content_ids: list[UUID] = []
+    try:
+        async with SessionLocal() as session:
+            for i in range(count):
+                key = f"users/1/courses/{course_id}/{uuid4()}_video.mp4"
+                content = CourseContent(
+                    course_id=course_id,
+                    category="media",
+                    title=f"Lecture {i}",
+                    file_key=key,
+                    original_filename="video.mp4",
+                    mime_type="video/mp4",
+                    created_at=tied,
+                )
+                session.add(content)
+                await session.flush()
+                asset = VideoAsset(
+                    course_id=course_id,
+                    content_id=content.id,
+                    provider="local",
+                    status="uploaded",
+                    source_file_key=key,
+                    original_filename="video.mp4",
+                    mime_type="video/mp4",
+                    created_at=tied,
+                )
+                session.add(asset)
+                content_ids.append(content.id)
+            await session.commit()
+    finally:
+        await engine.dispose()
+    return content_ids
+
+
+@pytest.mark.asyncio
+async def test_list_order_is_deterministic_for_tied_created_at(monkeypatch) -> None:
+    """
+    Regression: uploading many videos at once mixed up their order until a refresh.
+
+    Root cause was `ORDER BY created_at DESC` with no unique tie-breaker: created_at
+    is populated by func.now() (transaction-start time), so a burst of uploads can
+    share a timestamp and PostgreSQL then returns tied rows in arbitrary heap order,
+    which can differ between calls. Both list endpoints now tie-break on id, so the
+    order is stable across refetches.
+    """
+    monkeypatch.setenv("S3_BUCKET", "classmate")
+    get_settings.cache_clear()
+    settings = get_settings()
+
+    if not await _can_connect(settings.database_url):
+        pytest.skip(
+            "Database not reachable. Start Postgres and ensure DATABASE_URL is correct "
+            "(docker-compose.yml maps host 5433 -> container 5432)."
+        )
+
+    await asyncio.to_thread(_run_migrations_sync)
+
+    password = "pw"
+    email = f"order-{uuid4()}@example.com"
+    user = await _create_user(settings.database_url, email=email, password=password)
+    course = await _create_course(settings.database_url, user_id=user.id, name="Order course")
+
+    content_ids = await _seed_videos_with_same_created_at(
+        settings.database_url, course_id=course.id, count=6
+    )
+    # Expected deterministic order: created_at DESC, id DESC (all created_at tie here).
+    expected_content_order = [str(cid) for cid in sorted(content_ids, reverse=True)]
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        csrf = await client.get("/api/v1/auth/csrf")
+        token = csrf.json()["csrfToken"]
+        login = await client.post(
+            "/api/v1/auth/login",
+            json={"email": email, "password": password},
+            headers={settings.csrf_header_name: token},
+        )
+        assert login.status_code == 200
+
+        # Fetch the contents list twice; order must be identical and match the expected
+        # (created_at DESC, id DESC) ordering — no reshuffling between refetches.
+        orders: list[list[str]] = []
+        for _ in range(2):
+            res = await client.get(
+                f"/api/v1/courses/{course.id}/contents", params={"category": "media"}
+            )
+            assert res.status_code == 200
+            orders.append([item["id"] for item in res.json()])
+        assert orders[0] == expected_content_order
+        assert orders[0] == orders[1]
+
+        # The video-assets list must be deterministic too (used for status badges).
+        asset_orders: list[list[str]] = []
+        for _ in range(2):
+            res = await client.get(f"/api/v1/courses/{course.id}/video-assets")
+            assert res.status_code == 200
+            asset_orders.append([item["id"] for item in res.json()])
+        assert asset_orders[0] == asset_orders[1]
+        assert len(asset_orders[0]) == len(content_ids)
 
 

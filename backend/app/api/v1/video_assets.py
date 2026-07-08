@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.core.s3 import s3_client
 from app.core.settings import Settings, get_settings
 from app.db.models.course import Course
 from app.db.models.course_content import CourseContent
@@ -22,7 +23,8 @@ from app.schemas.transcript_segment import TranscriptSegmentPublic
 from app.schemas.course_content import CourseContentPublic
 from app.schemas.video_chapter import VideoChapterPublic
 from app.schemas.video_asset import VideoAssetCreate, VideoAssetPublic
-from app.services.transcription import _s3_client, transcribe_video_asset
+from app.services.chat_citations import ensure_owned_course
+from app.services.transcription import transcribe_video_asset
 from app.services.lecture_artifacts import generate_and_store_lecture_artifacts
 
 router = APIRouter(tags=["video-assets"])
@@ -68,14 +70,6 @@ class VideoAssetSummaryPublic(BaseModel):
     ai_summary: str | None = Field(default=None, serialization_alias="aiSummary")
     ai_summary_generated_at: datetime | None = Field(default=None, serialization_alias="aiSummaryGeneratedAt")
     ai_summary_error: str | None = Field(default=None, serialization_alias="aiSummaryError")
-
-
-async def _get_owned_course(db: AsyncSession, *, course_id: UUID, user_id: int) -> Course:
-    res = await db.execute(select(Course).where(Course.id == course_id, Course.user_id == user_id))
-    course = res.scalar_one_or_none()
-    if course is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course not found")
-    return course
 
 
 async def _validate_content_link(
@@ -136,7 +130,7 @@ def _to_public_with_thumbnail(asset: VideoAsset, *, settings: Settings, s3=None)
     pub = VideoAssetPublic.model_validate(asset)
     if asset.thumbnail_file_key and settings.s3_bucket:
         try:
-            client = s3 if s3 is not None else _s3_client(settings)
+            client = s3 if s3 is not None else s3_client(settings)
             pub.thumbnail_url = client.generate_presigned_url(
                 ClientMethod="get_object",
                 Params={"Bucket": settings.s3_bucket, "Key": asset.thumbnail_file_key},
@@ -155,13 +149,18 @@ async def list_video_assets(
     current_user: User = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> list[VideoAssetPublic]:
-    await _get_owned_course(db, course_id=course_id, user_id=current_user.id)
+    await ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
     res = await db.execute(
-        select(VideoAsset).where(VideoAsset.course_id == course_id).order_by(VideoAsset.created_at.desc())
+        # Deterministic tie-breaker (see list_course_contents): created_at comes from
+        # func.now() and can tie for near-simultaneous uploads, so we add id.desc()
+        # to keep the order stable across refetches.
+        select(VideoAsset)
+        .where(VideoAsset.course_id == course_id)
+        .order_by(VideoAsset.created_at.desc(), VideoAsset.id.desc())
     )
     assets = list(res.scalars().all())
     s3 = (
-        _s3_client(settings)
+        s3_client(settings)
         if settings.s3_bucket and any(a.thumbnail_file_key for a in assets)
         else None
     )
@@ -182,7 +181,7 @@ async def create_video_asset(
     Canonical client flow is:
       POST /courses/{course_id}/videos  (atomic content + asset creation)
     """
-    await _get_owned_course(db, course_id=course_id, user_id=current_user.id)
+    await ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
 
     if not settings.s3_bucket:
         raise HTTPException(
@@ -271,7 +270,7 @@ async def finalize_video_upload(
     Atomic finalize step after a presigned upload. This replaces the old best-effort
     client flow (create content -> create video asset) with one server-side transaction.
     """
-    await _get_owned_course(db, course_id=course_id, user_id=current_user.id)
+    await ensure_owned_course(db, course_id=course_id, user_id=current_user.id)
 
     if not settings.s3_bucket:
         raise HTTPException(
