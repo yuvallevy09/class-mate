@@ -239,7 +239,8 @@
   .legcard .lss{font-family:var(--mono);font-size:.85cqw;color:var(--ink-soft)}
   .tchip{font-family:var(--mono);font-size:.77cqw;background:var(--paper-2);
     border:.1cqw solid var(--line);border-radius:999px;padding:.1cqw .5cqw;color:var(--navy)}
-  .cvg{text-align:center;color:var(--amber);font-size:1.85cqw;font-weight:800;line-height:.5}
+  .cvg{display:flex;align-items:center;justify-content:center;color:var(--amber)}
+  .cvg svg{width:2.4cqw;height:auto;display:block}
   .rrfcard{border:.16cqw solid var(--amber-deep);border-radius:.58cqw;background:var(--amber-wash);
     padding:.95cqw .85cqw;display:flex;flex-direction:column;gap:.72cqw;align-items:center}
   .rrfhead{display:flex;flex-direction:column;align-items:center;gap:.02cqw}
@@ -664,7 +665,7 @@
                 </div>
               </div>
 
-              <div class="cvg">⌄</div>
+              <div class="cvg"><svg viewBox="0 0 24 11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3 L12 9 L21 3"/></svg></div>
 
               <!-- RRF fusion: the same docs (A–D) re-rank across both legs, then fuse -->
               <div class="rrfcard">
