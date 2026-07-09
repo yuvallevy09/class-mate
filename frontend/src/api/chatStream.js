@@ -13,7 +13,7 @@ import { normalizeCitationMarkers } from "@/components/chat/citations";
  *   viewing (optional): { watchingVideoAssetId, watchingTimestampSec } — sent so
  *   the backend scopes retrieval to the lecture being watched (video chat).
  * handlers:
- *   onStatus({ stage, label })  stage: "searching" | "reading" | "generating"
+ *   onStatus({ stage, label })  stage: "searching" | "generating"
  *   onThinkingDelta(text)       appended reasoning text
  *   onAnswerDelta(text)         appended answer text (RAW [N] markers; the UI normalizes)
  *   onCitations(citations)      ChatCitation[]

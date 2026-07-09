@@ -41,7 +41,7 @@ Three things are enforced at the door, before a presigned URL is ever issued (`u
 
 - **Ownership** — the requesting user must own the target course (else `404`).
 - **Size** — `sizeBytes` must be within `UPLOAD_MAX_SIZE_BYTES` (1 GiB default). The frontend hint is advisory; this is the real limit.
-- **Video-only** — `contentType` must start with `video/`. This is the first of three layers (presign → API validation → DB CHECK) that keep the corpus video-only.
+- **Video-only** — `contentType` must start with `video/`. This presign gate is the hard enforcement point; finalize re-checks a *supplied* MIME type, and the DB CHECK constrains `category` to `media`.
 
 The S3 key is namespaced `users/{user_id}/courses/{course_id}/{uuid}_{filename}` — user-scoped so a later finalize can't reference someone else's object (the finalize path re-checks the `users/{id}/` prefix).
 
@@ -156,7 +156,7 @@ faster-whisper runs on Runpod serverless, called one of two ways (`RUNPOD_USE_RU
 
 The client parses tolerantly (accepting `start`/`start_sec`, `output`/`result`, several "success" spellings) so minor worker-schema drift doesn't break ingestion. The one hard contract: **non-empty timestamped segments**, or it's an `error`.
 
-> **Honest limitation — in-process, not a queue.** This runs via FastAPI `BackgroundTasks`, i.e. _in the web process_, after the response is sent. Blocking work (ffmpeg, S3, polling) is pushed to threads with `asyncio.to_thread` so it doesn't stall the event loop — but a process restart kills in-flight jobs, and there's no retry queue or backpressure. The [resume path](#5-resumability--idempotency) makes recovery a one-call retry, but moving to a real worker/queue is on the roadmap and is the right next step for large courses.
+> **Honest limitation — in-process, not a queue.** This runs via FastAPI `BackgroundTasks`, i.e. _in the web process_, after the response is sent. Blocking work (ffmpeg, S3) is pushed to threads with `asyncio.to_thread`, and the Runpod HTTP calls are natively async (`httpx`), so the event loop isn't stalled — but a process restart kills in-flight jobs, and there's no retry queue or backpressure. The [resume path](#5-resumability--idempotency) makes recovery a one-call retry, but moving to a real worker/queue is on the roadmap and is the right next step for large courses.
 
 ---
 
@@ -167,7 +167,7 @@ Persisting `transcript_segments` makes a lecture _playable_. Making it _searchab
 ```mermaid
 flowchart LR
     SEG["transcript_segments<br/>(many short whisper cuts)"] --> CH{group by chapter}
-    CH --> DF["duration-first packing<br/>20–60s target, ~400 tok soft cap<br/>1–2 sentence overlap"]
+    CH --> DF["duration-first packing<br/>~20–30s target (cap 60s), ~400 tok soft cap<br/>1–2 sentence overlap"]
     DF --> EMB["embed batch<br/>(best-effort)"]
     EMB --> CC["content_chunks<br/>text + embedding? + metadata"]
 
@@ -175,11 +175,11 @@ flowchart LR
     class EMB best
 ```
 
-**Why re-chunk at all?** Whisper emits many short cuts (a few seconds each) — too granular to retrieve against. The ingester packs them into **duration-first** chunks: aim for 20–60 seconds of speech each (hard cap 60s), with a soft ~400-token bound to avoid runaway chunks and a 1–2 sentence overlap so a concept split across a boundary is still findable from either side. Duration is the primary axis because it maps to "a coherent thing the lecturer said," and it gives every chunk a clean `[start_sec, end_sec]` for timestamp-deep-linked citations.
+**Why re-chunk at all?** Whisper emits many short cuts (a few seconds each) — too granular to retrieve against. The ingester packs them into **duration-first** chunks: a chunk flushes once it holds roughly 20–30 seconds of speech (soft cap 60s — an oversized single segment is kept whole), with a soft ~400-token bound to avoid runaway chunks and a 1–2 sentence overlap so a concept split across a boundary is still findable from either side. Duration is the primary axis because it maps to "a coherent thing the lecturer said," and it gives every chunk a clean `[start_sec, end_sec]` for timestamp-deep-linked citations.
 
 Chunks are computed **per chapter** (each chunk gets a `chunk_index_in_chapter`), which is what later powers chapter-scoped neighbor expansion at query time. Embedding is a **best-effort batch**: if `get_embeddings` returns vectors of the right count and dimensionality (1536) they're written, otherwise the chunks land embedding-less and the lecture becomes `done_no_embeddings`. The whole write is **replace-all by `content_id`**, so re-ingesting a lecture cleanly supersedes the old chunks.
 
-Each chunk also carries a small `metadata` JSON blob (`video_asset_id`, `start_sec`/`end_sec`, `language_code`, `title`, `chapter_title`) used to render citations without extra joins.
+Each chunk also carries a small `metadata` JSON blob (`video_asset_id`, `start_sec`/`end_sec`, `language_code`, `title`, `chapter_title`, plus `doc_type`, `source_kind`, and `original_filename`) used to render citations without extra joins.
 
 ### Chapters: dormant but wired
 
@@ -196,11 +196,12 @@ flowchart TD
     T[POST /transcribe] --> Q{current status?}
     Q -->|in progress| NOOP[no-op, return current status]
     Q -->|done* and not force| NOOP
-    Q -->|error, or force| GO[clear completion markers<br/>status = extracting_audio<br/>enqueue task]
+    Q -->|error| GO[status = extracting_audio<br/>enqueue task]
+    Q -->|force| CLR[clear completion markers] --> GO
 ```
 
 - A lecture already `extracting_audio` / `transcribing` is a **no-op** (no double-processing).
-- A `done_*` lecture is left alone unless `force=true` — then completion markers are cleared and it re-runs from scratch.
+- A `done_*` lecture is left alone unless `force=true` — then completion markers (`transcription_job_id`, `transcription_completed_at`, `transcript_ingested_at`) are cleared and it re-runs from scratch. A plain retry of an `error` asset re-enqueues without clearing them — only `force` resets the markers.
 - Because both `transcript_segments` and `content_chunks` use **replace-all** semantics, a re-run is safe and converges to the same result rather than accumulating duplicates.
 
 Combined with the finalize idempotency key, the two "retry" surfaces — re-finalize and re-transcribe — are both safe to call repeatedly, which matters when the front end retries on flaky networks.
@@ -213,11 +214,12 @@ The defaults run end-to-end; these are the levers that matter in production.
 
 | Setting                                        | Default            | Why you'd change it                                                                           |
 | ---------------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------- |
-| `UPLOAD_MAX_SIZE_BYTES`                        | 1 GiB              | Real lecture videos. The frontend `VITE_UPLOAD_MAX_SIZE_MB` is just a hint; this is enforced. |
+| `UPLOAD_MAX_SIZE_BYTES`                        | 1 GiB              | Real lecture videos. The frontend `VITE_UPLOAD_MAX_SIZE_MB` is a client-side pre-check; this is the enforced limit. |
 | `RUNPOD_USE_RUNSYNC`                           | `true`             | Switch to `run`+poll for very long lectures where a single blocking HTTP call is impractical. |
 | `RUNPOD_TIMEOUT_SECONDS`                       | 1800               | Overall transcription budget.                                                                 |
 | `RUNPOD_WHISPER_MODEL`                         | `base`             | Larger models for accuracy (`small`/`medium`/`large-v3`) at higher cost/latency.              |
-| `S3_AUDIO_PRESIGN_EXPIRES_SECONDS`             | —                  | Must outlive the transcription job (Runpod fetches the audio mid-job).                        |
+| `S3_AUDIO_PRESIGN_EXPIRES_SECONDS`             | 3600               | Must outlive the transcription job (Runpod fetches the audio mid-job).                        |
+| `RUNPOD_HTTP_TIMEOUT_SECONDS`                  | 120                | Per-request HTTP timeout in `run`+poll mode (distinct from the overall budget above).         |
 | `THUMBNAIL_SEEK_SECONDS` / long-video variants | 1.0                | Where to grab the thumbnail frame; longer videos seek further in.                             |
 | `CHAPTERS_ENABLED`                             | `false`            | Turn on real semantic chapters (see above).                                                   |
 | `RAG_ENABLED`                                  | `true`             | Off short-circuits chunk ingestion (every lecture becomes `done_no_index`).                   |

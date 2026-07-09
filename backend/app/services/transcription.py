@@ -282,7 +282,7 @@ def _presign_get_object_url(settings: Settings, *, key: str, expires_seconds: in
 async def transcribe_video_asset(*, video_asset_id: UUID, requested_language: str | None = None) -> None:
     """Background task: download video -> ffmpeg -> Runpod -> persist transcript_segments.
 
-    This is the core PR3.3/PR3.4 pipeline for Video Assets (local uploads):
+    The transcription pipeline for locally-uploaded video assets:
     - Download video from S3 using `video_assets.source_file_key`
     - Extract audio via ffmpeg (mono, 16kHz WAV)
     - Upload extracted audio back to S3 and store `video_assets.audio_file_key`

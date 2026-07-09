@@ -48,9 +48,9 @@ Each step is a **DSPy signature** — a typed input/output contract — wrapped 
 | `GenerateRetrievalDetails` | `ChainOfThought` | Emit a self-contained query, lecture routing, and an optional jump-to target. |
 | `AnswerFromContext` | `ChainOfThought` | Answer using only retrieved docs, with strict numeric citations. |
 
-DSPy buys three things here: **separation of prompt from control flow** (re-tiering a step or swapping a retriever doesn't touch prompt text), **`ChainOfThought` reasoning** that's captured and surfaced as the "thinking" panel, and **`streamify`** for token streaming. The module is deliberately **string-in / string-out and DB-agnostic** — retrieval is injected as a `CourseRetriever`, so the whole orchestrator is unit-testable with a mock retriever and a DSPy `DummyLM`.
+DSPy buys three things here: **separation of prompt from control flow** (re-tiering a step or swapping a retriever doesn't touch prompt text), **`ChainOfThought` reasoning** that's captured and surfaced as the "thinking" panel, and **`streamify`** for token streaming. The DSPy signatures are deliberately **string-in / string-out** — retrieval is injected as a `CourseRetriever` (the orchestrator threads the DB session through to it), so the whole cascade is unit-testable with a mock retriever and a DSPy `DummyLM`.
 
-One subtle design choice: each signature gets a **purpose-built projection** of the course, not the whole thing. The router/clarifier get a lean catalog; query generation gets the rich lecture summaries that drive routing; `AnswerFromContext` gets only a minimal header — its content must come from the retrieved docs, and a richer course view would invite *uncited* claims. Views are rendered lazily, so a turn only pays for what its branch uses.
+One subtle design choice: each signature gets a **purpose-built projection** of the course, not the whole thing. The router, clarifier, and query generator all get a lean catalog (slug, title, one-line AI description per lecture); `AnswerFromContext` gets only a minimal header — its content must come from the retrieved docs, and a richer course view would invite *uncited* claims. Views are rendered lazily, so a turn only pays for what its branch uses. (A richer `to_detailed_info()` projection carrying the full lecture summaries exists on `CourseInfo` but is currently unused — the long-form `ai_summary` doesn't feed the chat pipeline at runtime.)
 
 ### Blocking and streaming, same cascade
 
@@ -97,9 +97,9 @@ The `hybrid_course_wide` step is the interesting one. The model scopes its searc
 Two retrievers handle "point at a moment" questions, both deterministic (no ranking):
 
 - **`retrieve_explicitly`** — the student named a spot ("what is she explaining in L2 at 27:36?"). Loads the transcript *window* around that timestamp.
-- **`retrieve_recent_window`** — video mode only. Loads the trailing ~120 seconds *before the playback head* to anchor deictic questions like "what did he just say?" / "explain that." This is additive — merged with whatever the main cascade retrieved, and able to stand alone if retrieval came back empty.
+- **`retrieve_recent_window`** — video mode only. Loads the trailing ~120 seconds *before the playback head* to anchor deictic questions like "what did he just say?" / "explain that." This is additive — merged with whatever the main cascade retrieved, and able to stand alone if retrieval came back empty (in which case the turn's `retrieval_path` is labeled `explicit`, worth knowing when reading path analytics).
 
-Both pick their window the same way, and **this is exactly where chapters earn their keep**:
+For the **explicit** retriever, the window is picked chapter-first — and **this is exactly where chapters earn their keep**:
 
 ```mermaid
 flowchart TD
@@ -111,7 +111,9 @@ flowchart TD
     class W1 good
 ```
 
-`_find_chapter_at` deliberately **excludes the `Full Lecture` fallback** (it filters `model_id IS NOT NULL`; only real LLM-generated chapters carry a `model_id`). So today, with chapters dormant, this path *always* takes the right branch — a fixed ±60s (explicit) or 120s (recent) window. Turn `CHAPTERS_ENABLED=true` on and the same code starts returning the actual topical section the student is in, with no other change. This is the single place where enabling chapters produces a noticeable retrieval-quality difference (see the [chapters note in `data.md`](./data.md#a-note-on-chapters)).
+`_find_chapter_at` deliberately **excludes the `Full Lecture` fallback** (it filters `model_id IS NOT NULL`; only real LLM-generated chapters carry a `model_id`). So today, with chapters dormant, the explicit path *always* takes the fixed-window branch — 60s centered on the timestamp (±30s). Turn `CHAPTERS_ENABLED=true` on and the same code starts returning the actual topical section the student is in, with no other change — the single place where enabling chapters produces a noticeable retrieval-quality difference (see the [chapters note in `data.md`](./data.md#a-note-on-chapters)).
+
+The **recent** window is different: it always keeps its fixed 120s lookback regardless of chapters — it calls `_find_chapter_at` only to *label* the returned doc with the chapter at the playback head, never to widen the window.
 
 ---
 
@@ -135,7 +137,7 @@ flowchart LR
 
 - **Lexical leg** — Postgres `pg_textsearch` BM25 over the chunk text. Always runs.
 - **Semantic leg** — embed the query (OpenAI `text-embedding-3-small`, 1536-dim) and rank by pgvector cosine distance over the HNSW index. **Best-effort.**
-- **RRF fusion** — [Reciprocal Rank Fusion](https://learn.microsoft.com/azure/search/hybrid-search-ranking): each leg contributes `1/(k0 + rank)` per hit (`k0=60`), summed across legs, deduped by `chunk_id`, top 8. RRF needs no score calibration between the two legs — it works purely on ranks, which is what makes mixing BM25 scores with cosine distances clean.
+- **RRF fusion** — [Reciprocal Rank Fusion](https://learn.microsoft.com/azure/search/hybrid-search-ranking): each leg contributes `1/(k0 + rank)` per hit (`k0=60`), summed across legs, deduped by `chunk_id` (with `id` / content-prefix fallbacks), top 8. RRF needs no score calibration between the two legs — it works purely on ranks, which is what makes mixing BM25 scores with cosine distances clean.
 - **Neighbor expansion** — after fusion, pull ±1 neighboring chunk *within the same chapter* (capped at 6 extra). A hit mid-explanation gets its surrounding context without bloating chunk size. This is the chapter-scoped query path that the dormant fallback chapter keeps exercising (with one chapter, "within the chapter" means "within the lecture").
 
 ### Graceful degradation
@@ -183,8 +185,8 @@ flowchart TD
 
 Two things make this robust rather than fragile:
 
-- **Safety by construction.** If `MODEL_ROLES_ENABLED=false`, or the resolved tier's provider key is missing, `build_lm_for_role` falls back to the global provider instead of erroring. A dev box with only `GOOGLE_API_KEY` runs the *entire* pipeline on Gemini Flash — tiering only fully applies once all three keys are set. This is why a missing key never makes a request worse-configured than the single-provider baseline.
-- **A documented gotcha.** `title` looks like a flash job (3–5 word label) but lives on haiku: Gemini Flash spends "thinking" tokens that count against `max_tokens`, so a tiny budget (the title's ~40) truncates to empty output. The per-role token budgets (`router` 512, answers 2048) live alongside the tier map.
+- **Safety by construction.** If `MODEL_ROLES_ENABLED=false`, or the resolved tier's provider key is missing, `build_lm_for_role` falls back to the global provider instead of erroring. A dev box with only `GOOGLE_API_KEY` runs the *entire* pipeline on Gemini Flash — tiering fully applies once both `ANTHROPIC_API_KEY` and `GOOGLE_API_KEY` are set (`OPENAI_API_KEY` is embeddings-only and plays no part in tiering). This is why a missing key never makes a request worse-configured than the single-provider baseline.
+- **A documented gotcha.** `title` looks like a flash job (3–5 word label) but lives on haiku: Gemini Flash spends "thinking" tokens that count against `max_tokens`, so a tiny budget (the title's ~40) truncates to empty output. The per-role token budgets (`router` 512, `clarify` 1024, answers 2048) live in `teaching_assistant.py`, next to the modules they bound.
 
 Re-tiering is a one-line change (move `gen_retrieval_params` to haiku once an eval confirms quality holds), and the resolved model id per role is recorded in the turn's `debug` for observability.
 
@@ -195,7 +197,7 @@ Re-tiering is a one-line change (move `gen_retrieval_params` to haiku once an ev
 Grounding is only useful if citations are trustworthy, so citation handling is strict and defensive:
 
 1. **The prompt forbids anything but numeric keys.** `AnswerFromContext` is told, in no uncertain terms: cite with `[1]`, `[2]` only; never by slug (`[L1]`), never raw timestamps, never echo the `[Source: …]` metadata, never invent a number not in the docs. Docs are rendered with 1-based numeric keys that line up with the citations array.
-2. **Recovery for when models slip.** Smaller/faster models occasionally echo the lecture slug they see (`[L1]`). `_normalize_slug_citations` walks every `[...]` in the reply and rewrites a known slug to its numeric index *before* the link formatter runs (which only touches `[<digits>]`). Pure-digit and unknown brackets are left alone.
+2. **Recovery for when models slip.** Smaller/faster models occasionally echo the lecture slug they see (`[L1]`). `_normalize_slug_citations` walks every `[...]` in the reply and rewrites a known slug to its numeric index *before* the link formatter runs (which turns `[N]` / `[#N]` digit citations into links, grouping video citations per time range). Pure-digit and unknown brackets are left alone.
 3. **Enrichment into deep links.** `_docs_to_citations` turns each retrieved doc into a `ChatCitation` carrying the lecture slug, start/end seconds, chapter id/title, and a cleaned snippet (inline `[M:SS]` markers stripped, capped at 240 chars). `attach_citation_urls` and `attach_video_chapter_titles` then add the player URL and chapter label, so the UI can render a pill that jumps to the exact second.
 
 The result is a citation that survives the round-trip from model output to a clickable timestamp — and degrades to plain numbered references even when the model misbehaves.

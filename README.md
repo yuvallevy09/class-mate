@@ -8,7 +8,7 @@ Instead of a generic chatbot, the assistant is grounded in your lectures, enabli
 - “Summarize what the professor said between minutes 12 and 20 of lecture 3.”
 - “I'm at 27:36 in this lecture — what is she referring to here?”
 
-> **Scope today:** ClassMate handles **video lectures only**. Uploads are restricted to `video/*`, and the content model is video-only end to end (DB, API, and UI). There is no PDF/notes/slides ingestion in this version — see the [Roadmap](#roadmap).
+> **Scope today:** ClassMate handles **video lectures only**. Uploads are restricted to `video/*` (the presign gate; finalize re-checks any supplied MIME type), the DB constrains content to `category = 'media'`, and the UI flow is video-only. (A generic course-contents API layer exists underneath, built for future non-video content.) There is no PDF/notes/slides ingestion in this version — see the [Roadmap](#roadmap).
 
 ---
 
@@ -25,7 +25,7 @@ Instead of a generic chatbot, the assistant is grounded in your lectures, enabli
   - Optional **semantic chapterization** (off by default — see [LLM configuration](#llm-configuration)).
 - **AI chat (grounded, streaming, persisted)**:
   - Two surfaces: **course-wide** chat and **per-lecture** chat (separate conversation spaces). Per-lecture chat is **viewing-context aware** — it knows which lecture and timestamp you're watching.
-  - Responses **stream over Server-Sent Events** (status → thinking → citations → answer), with a non-streaming endpoint as a fallback.
+  - Responses **stream over Server-Sent Events** (thinking → status → citations → answer), with a non-streaming endpoint as a fallback.
   - **Conversations and messages are persisted** in Postgres; each surface has its own conversation history (including a per-lecture conversation switcher).
   - **Citations** are rendered as inline pills that deep-link to the exact timestamp in the player.
 - **Retrieval (RAG)**: lecture transcripts are chunked and indexed in **Postgres** for hybrid (lexical + vector) retrieval. The retrieval corpus is **transcripts only**.
@@ -100,7 +100,7 @@ cp env.example .env.local   # set VITE_API_URL=http://localhost:3001, VITE_CHAT_
 npm run dev                 # Vite on :5173
 ```
 
-`VITE_CHAT_ENABLED=true` enables the course-chat composer (the in-lecture chat is always enabled). `VITE_UPLOAD_MAX_SIZE_MB` is a UI hint only — the backend enforces the real limit via `UPLOAD_MAX_SIZE_BYTES`.
+`VITE_CHAT_ENABLED=true` enables the course-chat composer (the in-lecture chat is always enabled). `VITE_UPLOAD_MAX_SIZE_MB` is a client-side pre-check (plus UI hint) — the backend enforces the real limit via `UPLOAD_MAX_SIZE_BYTES`.
 
 ### 3) Convenience scripts (repo root)
 
@@ -122,7 +122,7 @@ ClassMate uses **three model providers**, configured in `backend/.env`:
 **How provider selection works:**
 
 - `LLM_PROVIDER` (default `gemini`) sets the global/fallback chat model — `gemini` (dev) or `anthropic` (prod switch).
-- `MODEL_ROLES_ENABLED` (default `true`) tiers each pipeline step by job per the table above (mapping lives in `app/ai/model_roles.py`). **Any tier whose provider key is unset falls back to the global `LLM_PROVIDER` model.** So a dev box with only `GOOGLE_API_KEY` runs the whole chat pipeline on Gemini Flash — it works, but the per-task tiering only fully applies when all three keys are set.
+- `MODEL_ROLES_ENABLED` (default `true`) tiers each pipeline step by job per the table above (mapping lives in `app/ai/model_roles.py`). **Any tier whose provider key is unset falls back to the global `LLM_PROVIDER` model.** So a dev box with only `GOOGLE_API_KEY` runs the whole chat pipeline on Gemini Flash — it works, but the per-task tiering only fully applies when both `ANTHROPIC_API_KEY` and `GOOGLE_API_KEY` are set (`OPENAI_API_KEY` is embeddings-only and plays no part in tiering).
 - **Embeddings are independent of the chat provider.** Without `OPENAI_API_KEY`, transcripts are still indexed for lexical (BM25) search, but the vector leg is skipped (the lecture is marked `done_no_embeddings`). The 1536-dim is fixed in the pgvector schema; changing embedding models to another dimension needs a migration + reindex.
 
 **Other AI flags:**
@@ -135,7 +135,7 @@ ClassMate uses **three model providers**, configured in `backend/.env`:
 ## Configuration notes
 
 - **Object storage is Amazon S3.** Set `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION`; leave `S3_ENDPOINT_URL` empty to target AWS. For fully-local dev, set `S3_ENDPOINT_URL=http://localhost:9000` to use the bundled MinIO (console at `:9001`; default creds `minioadmin` / `minioadmin`).
-- **Upload size**: `UPLOAD_MAX_SIZE_BYTES` is small by default — **raise it for real lecture videos** (and keep the frontend's `VITE_UPLOAD_MAX_SIZE_MB` hint in sync).
+- **Upload size**: `UPLOAD_MAX_SIZE_BYTES` defaults to **1 GiB** (sized for lecture videos); keep the frontend's `VITE_UPLOAD_MAX_SIZE_MB` pre-check in sync if you change it.
 - **CORS**: set `CORS_ORIGINS` to the exact Vite origin (e.g. `http://localhost:5173`); cookie auth can't use a wildcard.
 - **Host consistency**: prefer `localhost` everywhere (don't mix with `127.0.0.1`) or cookie auth can break.
 - **DB port**: the Docker Postgres is published on **5433**; point `DATABASE_URL` at `127.0.0.1:5433` (as in `env.example`).
@@ -149,7 +149,8 @@ All routes are under `/api/v1` and require cookie auth unless noted. The canonic
 - **Auth** (public): `GET /auth/csrf`, `POST /auth/{login,signup,refresh,logout}`
 - **Users**: `GET /users/me`, `DELETE /users/me`
 - **Courses**: `GET|POST /courses`, `GET|DELETE /courses/{id}`
-- **Lectures (video)**: `POST /courses/{id}/videos` *(canonical: atomic content+asset, optional transcription kickoff)*, `GET /courses/{id}/video-assets`, `GET /video-assets/{id}`, `.../segments`, `.../chapters`, `.../summary`, `POST /video-assets/{id}/transcribe` *(start/retry)*
+- **Lectures (video)**: `POST /courses/{id}/videos` *(canonical: atomic content+asset, optional transcription kickoff)*, `GET /courses/{id}/video-assets`, `GET /video-assets/{id}`, `.../segments`, `.../chapters`, `.../summary`, `POST /video-assets/{id}/transcribe` *(start/retry)*, `POST /courses/{id}/video-assets` *(escape hatch: asset for an existing content row)*
+- **Contents (generic library layer)**: `GET|POST /courses/{id}/contents`, `GET|DELETE /contents/{id}`, `GET /contents/{id}/download[-redirect]`
 - **Uploads**: `POST /uploads/presign` *(presigned PUT; rejects non-`video/*`)*
 - **Chat**: `POST /courses/{id}/chat-v2` *(non-streaming)*, `POST /courses/{id}/chat-v2/stream` *(SSE)*
 - **Conversations**: `GET /courses/{id}/conversations[?video_asset_id=]`, `GET /conversations/{id}/messages`, `DELETE /conversations/{id}`
@@ -159,7 +160,7 @@ All routes are under `/api/v1` and require cookie auth unless noted. The canonic
 
 ## Tests
 
-Backend tests live in `backend/tests/` (36 files) covering auth, courses, the video assets API and S3 cleanup, the chat-v2 SSE/streaming/thinking/citations contract, viewing-context and per-lecture conversations, hybrid/explicit/Postgres retrieval, the (mocked) transcription pipeline, chapters, lecture artifacts, course summary/info, migrations, validation guards, and model-role resolution.
+Backend tests live in `backend/tests/` (37 files) covering auth, courses, the video assets API and S3 cleanup, the chat-v2 SSE/streaming/thinking/citations contract, viewing-context and per-lecture conversations, hybrid/explicit/Postgres retrieval, the (mocked) transcription pipeline, chapters, lecture artifacts, course summary/info, migrations, validation guards, and model-role resolution.
 
 ```bash
 cd backend
@@ -172,6 +173,7 @@ DB-backed tests run against a `<db>_test` database (auto-created + migrated by `
 
 ## Roadmap
 
+- **Answer feedback / ratings (in progress)**: an opt-in "Help ClassMate get better" toggle plus 1–5 star ratings on answers, to collect DSPy training data. The frontend UI exists behind `VITE_FEEDBACK_ENABLED` (off by default, currently backed by a localStorage stub); the backend has only the `FEEDBACK_ENABLED` flag so far — the feedback endpoints and DB columns are not built yet.
 - **Index more than transcripts**: bring uploaded PDFs / slides / notes (DOCX/PPTX, plaintext) into the retrieval corpus, with OCR for scanned slides and layout-aware chunking.
 - **Surface chapters in the player UI** and enable semantic chapterization by default.
 - **Persist model reasoning** so the "thinking" panel survives reloads.

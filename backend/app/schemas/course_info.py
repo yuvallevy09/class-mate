@@ -24,8 +24,9 @@ class Lecture(BaseModel):
     - `description` — instructor-authored blurb (`CourseContent.description`).
     - `ai_description` — short generated one-liner (`VideoAsset.ai_description`),
       the headline used in the lean catalog view.
-    - `summary` — long generated summary (`VideoAsset.ai_summary`), used in the
-      rich planning view that drives lecture routing.
+    - `summary` — long generated summary (`VideoAsset.ai_summary`), used only by
+      the rich planning view (`to_detailed_info`), which the chat pipeline does
+      not consume yet.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -82,7 +83,7 @@ class Lecture(BaseModel):
 
         Prefers the long `summary`; falls back to `ai_description` then the
         instructor `description`. Used by the rich planning view
-        (`to_detailed_info`) that drives lecture routing.
+        (`to_detailed_info`).
         """
         lines = [self._headline()]
         body = (self.summary or self.ai_description or self.description or "").strip()
@@ -171,9 +172,10 @@ class CourseInfo(BaseModel):
         """Lean catalog view: course header + a one-line entry per lecture
         (slug, title, transcript-ready flag, short one-liner).
 
-        Used by the router, clarifier, and no-context fallback — enough to judge
-        relevance and redirect, without the full summaries that would tempt the
-        model to answer from the catalog instead of retrieving.
+        Used by the router, clarifier, query generator, and no-context fallback
+        — enough to judge relevance and redirect, without the full summaries
+        that would tempt the model to answer from the catalog instead of
+        retrieving.
         """
         lines = self._course_header_lines()
         if self.lectures:
@@ -185,11 +187,13 @@ class CourseInfo(BaseModel):
     def to_detailed_info(self, *, summary_budget: int = 12_000) -> str:
         """Rich planning view: course header + each lecture with its full summary.
 
-        This is the view that drives lecture routing in `GenerateRetrievalDetails`,
-        so it spends the tokens. Per-lecture summary length scales DOWN with the
-        lecture count to keep the prompt bounded *without dropping later lectures*
-        — every slug stays visible (the old bottom-truncation could silently make
-        late lectures invisible to routing).
+        Not wired into the chat pipeline yet — `GenerateRetrievalDetails`
+        currently receives the lean catalog (`to_basic_info`); this view is the
+        candidate upgrade for lecture routing. It spends the tokens: per-lecture
+        summary length scales DOWN with the lecture count to keep the prompt
+        bounded *without dropping later lectures* — every slug stays visible
+        (bottom-truncation could silently make late lectures invisible to
+        routing).
         """
         lines = self._course_header_lines()
         if self.lectures:

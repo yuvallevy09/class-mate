@@ -9,7 +9,7 @@ It covers **structure at rest**: the entities, how they relate, the keys and con
 - How `chat_*` rows are produced and streamed → [`streaming-ux.md`](./streaming-ux.md)
 - The refresh-session rotation protocol → [`security.md`](./security.md)
 
-> **Scope note.** ClassMate is **video-only** in this version, and that pivot is baked into the schema (see [Schema evolution](#schema-evolution)). The retrieval corpus is **transcript chunks only**. There is no PDF/slide/notes ingestion — the tables that once supported it were dropped in migration `0022`.
+> **Scope note.** ClassMate is **video-only** in this version, and that pivot is baked into the schema. The retrieval corpus is **transcript chunks only**. There is no PDF/slide/notes ingestion — the `document_pages` table that once supported it (and the ingestion columns on `course_contents`) was dropped in migration `0022`.
 
 The source of truth is `app/db/models/*.py` (the ORM models) and `alembic/versions/*.py` (the DDL, including everything the ORM doesn't express: extensions, the BM25/HNSW indexes, and CHECK/UNIQUE constraints).
 
@@ -81,6 +81,7 @@ erDiagram
     TRANSCRIPT_SEGMENTS {
         uuid id PK
         uuid video_asset_id FK
+        uuid course_id FK
         float start_sec
         float end_sec
         text text
@@ -108,6 +109,7 @@ erDiagram
         uuid id PK
         uuid course_id FK
         uuid video_asset_id FK "nullable = course chat"
+        string title "nullable"
         datetime last_message_at
     }
     CHAT_MESSAGES {
@@ -123,7 +125,7 @@ erDiagram
 Two structural facts worth reading off the diagram:
 
 - **`course_id` is everywhere.** `transcript_segments`, `content_chunks`, and `chat_conversations` all carry `course_id` directly even though they could reach it through a parent. That denormalization is deliberate — it lets retrieval and ownership checks filter on a single indexed column without joins.
-- **`video_assets` is the hub of the video world.** It owns segments, chapters, and chunks, and it's the optional anchor for a conversation. Its 1:1 partner is `course_contents` (the library row the UI lists), linked by a `UNIQUE` `content_id`.
+- **`video_assets` is the hub of the video world.** It owns segments, chapters, and chunks, and it's the optional anchor for a conversation — a composite index on `(course_id, video_asset_id, last_message_at)` backs the per-lecture conversation switcher. Its 1:1 partner is `course_contents` (the library row the UI lists), linked by a `UNIQUE` `content_id`.
 
 ---
 
@@ -196,13 +198,7 @@ Both indexes come from Postgres extensions enabled in migrations, not from the O
 
 **1. The embedding column is nullable.** A chunk is useful the moment its `text` is indexed for BM25 — the embedding can arrive later (or never). This makes vector search a *backfill*, not a prerequisite: a course with no `OPENAI_API_KEY` still has fully working lexical retrieval, and embeddings can be added to existing chunks without re-ingesting. (How the query side copes with missing embeddings is the RAG doc's job.)
 
-**2. Embedding dimensionality is pinned and centralized.** pgvector requires a fixed dimension in the schema (`vector(1536)`). That number lives in exactly one place, `app/rag/embedding_config.py`:
-
-```python
-EMBEDDING_DIMS = 1536  # OpenAI text-embedding-3-small
-```
-
-Both the ORM column and the migration reference it. Changing embedding models to a different dimension is therefore a **schema migration + full reindex**, not a config flag — the comment in that file says so explicitly.
+**2. Embedding dimensionality is pinned.** pgvector requires a fixed dimension in the schema (`vector(1536)`). The canonical constant is `EMBEDDING_DIMS = 1536` in `app/rag/embedding_config.py`, which the ORM column imports; migration `0015` pins the same value independently — its NOTE calls out that the dimension is pinned there (historical migrations can't track runtime config). Changing embedding models to a different dimension is therefore a **schema migration + full reindex**, not a config flag — the settings comment on `RAG_EMBEDDING_MODEL` says so explicitly.
 
 **3. The vector type is a thin, async-safe shim.** `app/db/types/pgvector.py` defines a `TypeDecorator` whose storage impl is plain `Text`: vectors are bound as the literal string `'[0.1,0.2,...]'` and `CAST` to `vector(d)` in SQL. This keeps it compatible with asyncpg without a hard dependency on a pgvector client library, and leaves the actual `vector(d)` DDL to Alembic. The `metadata` column is mapped to the Python attribute `meta` because `metadata` is reserved by SQLAlchemy's Declarative API.
 
@@ -234,7 +230,7 @@ Background processing and direct-to-S3 uploads both retry, so the writes they dr
 |---|---|---|
 | `uq_video_assets_course_source_key` `(course_id, source_file_key)` | `video_assets` | Finalizing the same uploaded S3 object twice within a course. |
 | `ux_video_assets_content_id` `(content_id)` | `video_assets` | A second asset attaching to the same library row (enforces the 1:1). |
-| `ux_content_chunks_content_chunk_index` `(content_id, chunk_index)` | `content_chunks` | Duplicate chunks when ingestion re-runs (the ingester replaces by key). |
+| `ux_content_chunks_content_chunk_index` `(content_id, chunk_index)` | `content_chunks` | Duplicate chunks when ingestion re-runs (the ingester actually deletes-and-rewrites all of a content's chunks; the constraint is the safety net). |
 | `token_hash` UNIQUE | `refresh_sessions` | Two sessions colliding on the same token hash. |
 | `email` UNIQUE | `users` | Duplicate signups (the signup path catches the resulting IntegrityError → 409). |
 
@@ -249,7 +245,7 @@ model_id           str     -- which model produced it
 prompt_version     str     -- which prompt template
 ```
 
-This is the difference between "we have chapters" and "we can tell whether these chapters are stale." A re-run can skip work when `source_hash` matches, and a prompt change is visible in the data.
+This is the difference between "we have chapters" and "we can tell whether these chapters are stale" — a prompt or transcript change is visible in the data. (Today the lineage is write-only: re-runs regenerate unconditionally rather than comparing `source_hash`; skip-on-match is the obvious upgrade the columns enable.)
 
 ### Observable async pipelines
 

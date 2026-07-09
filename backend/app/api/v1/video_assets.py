@@ -533,7 +533,6 @@ async def start_transcription_stub(
 
     asset: VideoAsset = row[0]
 
-    # PR3.1: wire config validation now, implement the pipeline in PR3.2+.
     if not settings.s3_bucket:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -545,7 +544,6 @@ async def start_transcription_stub(
             detail="Runpod is not configured (missing RUNPOD_API_KEY / RUNPOD_ENDPOINT_ID)",
         )
 
-    # PR3.2: update DB state and enqueue background work (actual pipeline comes in PR3.3+).
     requested_language = None
     force = False
     if body is not None:
