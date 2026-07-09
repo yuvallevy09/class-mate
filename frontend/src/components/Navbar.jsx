@@ -6,6 +6,9 @@ import { motion } from "framer-motion";
 import { BookOpen, User, LogOut, Menu } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { FEEDBACK_ENABLED } from "@/lib/featureFlags";
+import { useFeedbackOptIn } from "@/hooks/useFeedbackOptIn";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,6 +34,7 @@ export default function Navbar({ onMenuClick, showMenu = false, authVariant = "l
   const queryClient = useQueryClient();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const { optedIn, setOptedIn } = useFeedbackOptIn();
 
   const { data: user } = useQuery({
     queryKey: ["currentUser"],
@@ -96,13 +100,38 @@ export default function Navbar({ onMenuClick, showMenu = false, authVariant = "l
                   <span className="text-sm font-medium hidden sm:block">{userLabel}</span>
                 </Button>
               </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48 bg-[#131313] border-white/10 text-white">
+            <DropdownMenuContent align="end" className="w-72 bg-[#131313] border-white/10 text-white">
               <div className="px-2 py-2">
                 <p className="text-sm font-medium">Signed in</p>
                 {user?.display_name && <p className="text-xs text-gray-300">{user.display_name}</p>}
                 <p className="text-xs text-gray-400">{user.email}</p>
               </div>
               <DropdownMenuSeparator className="bg-white/10" />
+              {FEEDBACK_ENABLED && (
+                <>
+                  <DropdownMenuItem
+                    onSelect={(e) => {
+                      e.preventDefault();
+                      setOptedIn(!optedIn);
+                    }}
+                    className="flex cursor-pointer items-start gap-2.5 py-2 focus:bg-white/5"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium leading-tight">Help ClassMate learn</p>
+                      <p className="mt-0.5 text-xs leading-snug text-gray-400">
+                        Rate answers to help improve future responses.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={optedIn}
+                      tabIndex={-1}
+                      aria-hidden
+                      className="pointer-events-none mt-0.5"
+                    />
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator className="bg-white/10" />
+                </>
+              )}
               <DropdownMenuItem
                 onSelect={(e) => {
                   e.preventDefault();

@@ -214,7 +214,7 @@ async def test_video_assets_auth_and_ownership(monkeypatch) -> None:
         missing = await client.get(f"/api/v1/video-assets/{uuid4()}")
         assert missing.status_code == 404
 
-        # Start transcription should flip status to processing (PR3.2 behavior).
+        # Start transcription should flip status to processing.
         async def _noop_transcribe_video_asset(*, video_asset_id, requested_language=None):
             return None
 

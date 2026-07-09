@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+from pathlib import Path
+
+# Allow running as a plain file (`python scripts/list_users.py`) by putting
+# the backend root on sys.path so `import app...` resolves.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine

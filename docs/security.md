@@ -50,7 +50,7 @@ Auth is entirely **cookie-based** — three cookies, each with a deliberate conf
 | `refresh_token` | ✅       | `/api/v1/auth` | The opaque refresh token, **path-scoped** so it's only ever sent to the auth routes — it never rides along on ordinary API calls. |
 | `csrf_token`    | ❌       | `/`            | Readable by JS _on purpose_ — the frontend echoes it into the `X-CSRF-Token` header ([§4](#4-csrf-double-submit-cookie)).         |
 
-All three honor `COOKIE_SECURE` and `COOKIE_SAMESITE`. `get_current_user` (the dependency on every protected route) reads the access cookie, decodes the JWT, loads the user, and rejects with `401` unless the user exists and `is_active`.
+All three honor `COOKIE_SECURE`; the auth cookies use `COOKIE_SAMESITE`, while the CSRF cookie has its own `CSRF_COOKIE_SAMESITE` knob. `get_current_user` (the dependency on every protected route) reads the access cookie, decodes the JWT, loads the user, and rejects with `401` unless the user exists and `is_active`.
 
 ---
 
@@ -76,7 +76,7 @@ sequenceDiagram
     API-->>C: new access + refresh cookies
 ```
 
-The new session is **flushed before** the old one is revoked, so the chain is never left dangling. Lookups filter on `revoked_at IS NULL AND expires_at > now` (refresh TTL is 14 days), and the user's `is_active` flag is re-checked on every refresh. **Logout** revokes the current session by hash and clears all cookies.
+The new session is **flushed before** the old one is revoked, so the chain is never left dangling. Lookups filter on `revoked_at IS NULL AND expires_at > now` (refresh TTL is 14 days), and the user's `is_active` flag is re-checked on every refresh. **Logout** revokes the current session by hash and clears the access and refresh cookies (the JS-readable CSRF cookie is left in place — it carries no auth).
 
 ### The stateless-access caveat
 
@@ -110,7 +110,7 @@ if course is None:
 Two things to notice:
 
 - **404, not 403.** A resource you don't own is reported as _not found_, not _forbidden_ — so the API never confirms that someone else's course id exists. No existence leak.
-- **Nested resources join up to the owner.** A video asset or conversation is checked by joining back to `courses` and filtering on `user_id`, so ownership is always rooted at the authenticated user. (`video_assets.py` alone has 11 such checks.)
+- **Nested resources join up to the owner.** A video asset or conversation is checked by joining back to `courses` and filtering on `user_id`, so ownership is always rooted at the authenticated user. (`video_assets.py` alone repeats this owner-rooted check on every one of its routes.)
 
 ### S3 key scoping
 

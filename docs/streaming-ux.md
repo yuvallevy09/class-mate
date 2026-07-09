@@ -12,7 +12,7 @@ The design goal is **progressive disclosure with no waterfalls**. A student shou
 
 ## 1. The event lifecycle
 
-The cascade (`TeachingAssistant.astream`) yields five typed events. The endpoint serializes each as an SSE `data:` frame; the frontend maps them 1:1 onto handlers. The **ordering is a contract**, and the key guarantee is that **citations arrive before any answer token** — so the UI can paint "Sources" while the answer is still streaming.
+The cascade (`TeachingAssistant.astream`) yields five typed events. The endpoint serializes each as an SSE `data:` frame; the frontend maps them 1:1 onto handlers. The one ordering that **is a contract**: **citations arrive before any answer token** — so the UI can paint "Sources" while the answer is still streaming. (The very first frames are the router's *thinking* deltas, which precede even the `status (searching)` frame; the "Searching course materials…" label the user sees instantly is set client-side at send time — the wire's own `status (searching)` frame carries the same label but arrives only after the router finishes.)
 
 ```mermaid
 sequenceDiagram
@@ -20,15 +20,17 @@ sequenceDiagram
     participant C as chatStream (parse)
     participant T as turn + typewriter
 
+    Note over T: "Searching…" label set client-side at send
+    S->>C: thinking δ (router)
+    C->>T: append to thinking panel
     S->>C: status (searching)
     C->>T: phase = retrieving
-    S->>C: thinking δ (router, then query-gen)
-    C->>T: append to thinking panel
+    S->>C: thinking δ (query-gen)
     Note over S: retrieval cascade runs
     S->>C: citations (enriched)
     C->>T: render Sources
     S->>C: status (generating)
-    S->>C: answer δ … δ … δ
+    S->>C: answer δ … δ … (+ thinking δ from the answer model)
     C->>T: typewriter reveals
     S->>C: done (exact persisted text)
     C->>T: converge + finalize
@@ -42,7 +44,7 @@ sequenceDiagram
 | `AnswerEvent`    | `answer`    | a chunk of answer text (raw `[N]` markers)  | Fed to the typewriter.                          |
 | `DoneEvent`      | `done`      | the exact persisted text + `conversationId` | Converges the live turn onto the saved message. |
 
-On the `answer` / `clarify` routes there's no retrieval, so the stream is shorter: router thinking → the reply streams → `done`. An `error` frame can replace `done` if the turn fails mid-stream ([§8](#8-persistence--the-livepersisted-handoff)).
+On the `answer` / `clarify` routes there's no retrieval, so the stream is shorter: router thinking → the reply streams (on the `answer` route, interleaved with the answer model's own reasoning) → `done`. An `error` frame can replace `done` if the turn fails mid-stream ([§8](#8-persistence--the-livepersisted-handoff)).
 
 ---
 
@@ -127,6 +129,8 @@ flowchart LR
 
 `finalizeIfReady()` gates on `doneInfoRef` (the stream finished) **and** `revealDoneRef` (the typewriter has revealed all the text). Why both? The answer streams faster than it's typed out. The moment the stream ends, React Query may refetch the conversation and try to swap the live turn for the persisted message — if that happened mid-reveal, the half-typed text would **snap to full instantly**, an ugly flicker. Gating on the typewriter too means the swap waits for the animation to finish. This is the one piece of state coordination that makes the whole thing feel smooth.
 
+> **Scope note.** The typewriter + dual finalization are the **course chat page's** behavior. The video player's side chat renders the live turn without animation (text grows as network deltas arrive) and swaps to the persisted message immediately at `done` — so the reveal gate is never exercised there.
+
 ---
 
 ## 6. The typewriter
@@ -156,7 +160,7 @@ Each pill opens a popover. On the video player page, a timestamp for the **curre
 
 ## 8. Persistence & the live→persisted handoff
 
-**Thinking is live-only.** The saved `ChatMessage` has `thinking = NULL`, so reloading history shows the answer and its citations but no reasoning panel (a "Thought for N s" line can still render). The thought process is an in-the-moment affordance, not a stored artifact.
+**Thinking is live-only.** The saved `ChatMessage` has `thinking = NULL`, so reloading history shows the answer and its citations with no reasoning panel at all ("Thought for N s" renders only during the live turn). The thought process is an in-the-moment affordance, not a stored artifact.
 
 **Every exit persists.** A turn is written exactly once, through `_persist_assistant_message`, on whichever of three paths it takes:
 

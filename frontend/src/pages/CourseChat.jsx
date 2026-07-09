@@ -14,7 +14,10 @@ import Navbar from "@/components/Navbar";
 import CourseSidebar from "@/components/CourseSidebar";
 import UserMessage from "@/components/chat/UserMessage";
 import AssistantMessage from "@/components/chat/AssistantMessage";
+import AnswerFeedback from "@/components/chat/AnswerFeedback";
 import ThinkingDisclosure from "@/components/chat/ThinkingDisclosure";
+import { FEEDBACK_ENABLED } from "@/lib/featureFlags";
+import { useFeedbackOptIn } from "@/hooks/useFeedbackOptIn";
 import { normalizeCitationMarkers } from "@/components/chat/citations";
 import { useAssistantTurn } from "@/hooks/useAssistantTurn";
 
@@ -40,6 +43,7 @@ export default function CourseChat() {
   shouldAutoScrollRef.current = shouldAutoScroll;
 
   const queryClient = useQueryClient();
+  const { optedIn: feedbackOptedIn } = useFeedbackOptIn();
 
   const { data: _course } = useQuery({
     queryKey: ["course", courseId],
@@ -287,6 +291,9 @@ export default function CourseChat() {
                           citations={msg.citations}
                           onOpenVideo={openVideoModal}
                         />
+                        {FEEDBACK_ENABLED && feedbackOptedIn && msg.id && (
+                          <AnswerFeedback messageId={msg.id} initialFeedback={msg.feedback} />
+                        )}
                       </div>
                     )}
                   </motion.div>

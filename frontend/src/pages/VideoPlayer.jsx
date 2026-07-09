@@ -29,6 +29,9 @@ import Navbar from "@/components/Navbar";
 import CourseSidebar from "@/components/CourseSidebar";
 import { fmtTimestamp } from "@/components/chat/citations";
 import AssistantMessage from "@/components/chat/AssistantMessage";
+import AnswerFeedback from "@/components/chat/AnswerFeedback";
+import { FEEDBACK_ENABLED } from "@/lib/featureFlags";
+import { useFeedbackOptIn } from "@/hooks/useFeedbackOptIn";
 import ThinkingDisclosure from "@/components/chat/ThinkingDisclosure";
 import UserMessage from "@/components/chat/UserMessage";
 import VideoConversationSwitcher from "@/components/chat/VideoConversationSwitcher";
@@ -142,6 +145,7 @@ export default function VideoPlayer() {
   // Reset to null on page entry / video switch.
   const [conversationId, setConversationId] = useState(null);
   const [isLoadingConversation, setIsLoadingConversation] = useState(false);
+  const { optedIn: feedbackOptedIn } = useFeedbackOptIn();
 
   const queryClient = useQueryClient();
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
@@ -341,10 +345,12 @@ export default function VideoPlayer() {
         queryFn: () => listConversationMessages(cid),
       });
       const mapped = (Array.isArray(rows) ? rows : []).map((m) => ({
+        id: m.id ?? null,
         role: m.role,
         content: m.content,
         citations: Array.isArray(m.citations) ? m.citations : [],
         thinking: m.thinking ?? null,
+        feedback: m.feedback ?? null,
       }));
       setMessages(mapped);
       setConversationId(String(cid));
@@ -677,6 +683,9 @@ export default function VideoPlayer() {
                   <div className="w-full">
                     {msg.thinking ? <ThinkingDisclosure thinkingText={msg.thinking} /> : null}
                     {renderAssistantBody(msg.content, msg.citations)}
+                    {FEEDBACK_ENABLED && feedbackOptedIn && msg.id && (
+                      <AnswerFeedback messageId={msg.id} initialFeedback={msg.feedback} />
+                    )}
                   </div>
                 )}
               </motion.div>

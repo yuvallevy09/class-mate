@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
+from pathlib import Path
+
+# Allow running as a plain file (`python scripts/create_user.py`) by putting
+# the backend root on sys.path so `import app...` resolves.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.security import hash_password
 from app.core.settings import get_settings
+from app.db.models.course import Course  # noqa: F401 - ensure mapper registry has Course for User.courses
 from app.db.models.user import User
 
 

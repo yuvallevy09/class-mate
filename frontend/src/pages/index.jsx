@@ -52,7 +52,7 @@ function _getCurrentPage(url) {
     return pageName || Object.keys(PAGES)[0];
 }
 
-// Create a wrapper component that uses useLocation inside the Router context
+// useLocation must be called inside the Router context, hence the wrapper.
 function PagesContent() {
     const location = useLocation();
     const currentPage = _getCurrentPage(location.pathname);

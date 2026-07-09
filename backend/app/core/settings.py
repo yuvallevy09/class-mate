@@ -100,6 +100,13 @@ class Settings(BaseSettings):
     # generate real chapters (the output token budget is already sized for it).
     chapters_enabled: bool = Field(default=False, validation_alias="CHAPTERS_ENABLED")
 
+    # "Help ClassMate learn" — per-answer ratings + feedback capture (opt-in per user).
+    # OFF by default. Reserved for the in-progress feedback feature: the backend
+    # endpoints and DB columns do NOT exist yet — today the frontend UI (behind
+    # VITE_FEEDBACK_ENABLED) runs on a localStorage stub. Pair the two flags once
+    # the endpoints land.
+    feedback_enabled: bool = Field(default=False, validation_alias="FEEDBACK_ENABLED")
+
     # OpenAI (embeddings)
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     chat_history_max_messages: int = Field(default=12, validation_alias="CHAT_HISTORY_MAX_MESSAGES")

@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClassMate — Code Report</title>
+<style>
+  @page { margin: 1.8cm 1.6cm; }
+  body { font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; line-height: 1.6;
+         color: #1a1a1a; max-width: 52em; margin: 0 auto; padding: 40px 24px; }
+  h1 { font-size: 2em; border-bottom: 3px solid #4f46e5; padding-bottom: 8px; }
+  h2 { color: #312e81; border-bottom: 1px solid #ddd; padding-bottom: 5px; margin-top: 2em; }
+  h3 { color: #1e1b4b; margin-top: 1.5em; }
+  h1, h2, h3, h4 { page-break-after: avoid; }
+  code { font-family: "SF Mono", Menlo, monospace; font-size: 0.85em; background: #f3f4f6;
+          padding: 1px 5px; border-radius: 3px; }
+  pre { background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px;
+         overflow-x: auto; page-break-inside: avoid; }
+  pre code { background: none; padding: 0; }
+  pre.mermaid { background: #fff; border: 1px dashed #c7d2fe; text-align: center; padding: 14px;
+                 page-break-inside: avoid; }
+  pre.mermaid svg { max-width: 100% !important; max-height: 22cm; height: auto !important; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 0.92em;
+           page-break-inside: avoid; }
+  th, td { border: 1px solid #d1d5db; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #eef2ff; }
+  blockquote { border-left: 3px solid #a5b4fc; margin-left: 0; padding-left: 16px; color: #444; }
+  hr { border: none; border-top: 1px solid #ddd; margin: 2em 0; }
+  a { color: #4f46e5; }
+</style></head><body>
+<h1 id="classmate-code-report">ClassMate — Code Report</h1>
+<p><strong>Author:</strong> Yuval Levy</p>
+<h2 id="classmate-overview">ClassMate Overview</h2>
+<p>ClassMate is a study companion for <strong>lecture videos</strong>: upload a course's lectures, and it transcribes, summarizes, and indexes them so a student can chat with an AI assistant that answers <em>from what was actually said in class</em> — with citations that jump to the exact moment in the video.</p>
+<h2 id="contents">Contents</h2>
+<ol>
+<li><a href="#data-md">Data model</a></li>
+<li><a href="#video-processing-md">Video processing</a></li>
+<li><a href="#rag-and-ai-md">Teaching assistant: RAG pipeline &amp; AI orchestration</a></li>
+<li><a href="#coming-soon-md">Future direction: the feedback → GEPA loop</a></li>
+</ol>
+<hr />
+<h3 id="tech-stack">Tech Stack</h3>
+<ul>
+<li><strong>Frontend</strong> — Vite + React 18 SPA; TanStack Query; TailwindCSS + shadcn/ui; <code>react-markdown</code> + KaTeX; SSE chat streaming.</li>
+<li><strong>Backend</strong> — async FastAPI; SQLAlchemy (async) + Alembic; <strong>Postgres</strong> for persistence <em>and</em> retrieval (<code>pgvector</code> + <code>pg_textsearch</code>); <strong>Amazon S3</strong> for uploads; <strong>ffmpeg</strong> + <strong>Runpod</strong> (faster-whisper) for transcription; <strong>DSPy</strong> for the AI pipelines.</li>
+<li><strong>Models</strong> — three providers, tiered per task: Anthropic (haiku and sonnet for router/answers/lecture summaries), Gemini (flash 2.5 for chapters/course summary), OpenAI (embeddings).</li>
+</ul>
+<hr />
+<h2 id="data-model">Data model</h2>
+<h3 id="where-the-data-lives">Where the data lives</h3>
+<p>A one-line role for each table, as a quick reference:</p>
+<table>
+<thead>
+<tr>
+<th>Table</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>users</code></td>
+<td>Identity + credentials; everything in the system belongs to a user.</td>
+</tr>
+<tr>
+<td><code>refresh_sessions</code></td>
+<td>Stores a hashed token and a link to the token that replaced it.</td>
+</tr>
+<tr>
+<td><code>courses</code></td>
+<td>A course - groups its lectures and carries the AI-written course overview.</td>
+</tr>
+<tr>
+<td><code>course_contents</code></td>
+<td>Holds the S3 Key.</td>
+</tr>
+<tr>
+<td><code>video_assets</code></td>
+<td>A lecture - processing status, extracted audio/thumbnail, and its AI title/description/summary.</td>
+</tr>
+<tr>
+<td><code>transcript_segments</code></td>
+<td>Segments produced by faster-whisper.</td>
+</tr>
+<tr>
+<td><code>content_chunks</code></td>
+<td>What the AI actually searches - grouped segments.</td>
+</tr>
+<tr>
+<td><code>chat_conversations</code></td>
+<td>Chat threads — cross course + video chats.</td>
+</tr>
+<tr>
+<td><code>chat_messages</code></td>
+<td>Each message in a thread, plus the sources the AI cited and its reasoning.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="the-entity-graph">The entity graph</h3>
+<pre class="mermaid">erDiagram
+    USERS ||--o{ COURSES : owns
+    USERS ||--o{ REFRESH_SESSIONS : &quot;has sessions&quot;
+
+    COURSES ||--o{ COURSE_CONTENTS : contains
+    COURSES ||--o{ VIDEO_ASSETS : contains
+    COURSES ||--o{ TRANSCRIPT_SEGMENTS : &quot;scopes&quot;
+    COURSES ||--o{ CONTENT_CHUNKS : &quot;scopes&quot;
+    COURSES ||--o{ CHAT_CONVERSATIONS : &quot;scopes&quot;
+
+    COURSE_CONTENTS ||--o| VIDEO_ASSETS : &quot;1:1 (content_id)&quot;
+    COURSE_CONTENTS ||--o{ CONTENT_CHUNKS : &quot;source row&quot;
+
+    VIDEO_ASSETS ||--o{ TRANSCRIPT_SEGMENTS : &quot;transcribed into&quot;
+    VIDEO_ASSETS ||--o{ VIDEO_CHAPTERS : &quot;chapterized into&quot;
+    VIDEO_ASSETS ||--o{ CONTENT_CHUNKS : &quot;chunked into&quot;
+    VIDEO_ASSETS ||--o{ CHAT_CONVERSATIONS : &quot;anchored to&quot;
+
+    VIDEO_CHAPTERS ||--o{ CONTENT_CHUNKS : &quot;labels (SET NULL)&quot;
+
+    CHAT_CONVERSATIONS ||--o{ CHAT_MESSAGES : &quot;holds turns&quot;
+
+    USERS {
+        int id PK
+        string email UK
+        string hashed_password
+        string display_name
+        bool is_active
+    }
+    REFRESH_SESSIONS {
+        uuid id PK
+        int user_id FK
+        string token_hash UK &quot;HMAC-SHA256, never raw&quot;
+        datetime expires_at
+        datetime revoked_at
+        uuid replaced_by_id FK &quot;self-ref, SET NULL&quot;
+    }
+    COURSES {
+        uuid id PK
+        int user_id FK
+        string name
+        text ai_summary &quot;+ generated_at / error&quot;
+    }
+    COURSE_CONTENTS {
+        uuid id PK
+        uuid course_id FK
+        string file_key &quot;S3 key&quot;
+        string mime_type
+    }
+    VIDEO_ASSETS {
+        uuid id PK
+        uuid course_id FK
+        string status &quot;uploaded -&gt; done&quot;
+        text ai_summary &quot;+ title / description&quot;
+    }
+    TRANSCRIPT_SEGMENTS {
+        uuid id PK
+        uuid video_asset_id FK
+        uuid course_id FK
+        float start_sec
+        float end_sec
+        text text
+        string language_code
+    }
+    VIDEO_CHAPTERS {
+        uuid id PK
+        uuid video_asset_id FK
+        int chapter_index
+        float start_sec
+        string title
+        int artifact_version &quot;+ source_hash / model_id&quot;
+    }
+    CONTENT_CHUNKS {
+        uuid id PK
+        uuid course_id FK
+        uuid content_id FK
+        uuid video_asset_id FK &quot;nullable&quot;
+        uuid chapter_id FK &quot;nullable, SET NULL&quot;
+        text text
+        vector embedding &quot;1536, nullable&quot;
+        jsonb metadata
+    }
+    CHAT_CONVERSATIONS {
+        uuid id PK
+        uuid course_id FK
+        uuid video_asset_id FK &quot;nullable = course chat&quot;
+        string title &quot;nullable&quot;
+        datetime last_message_at
+    }
+    CHAT_MESSAGES {
+        uuid id PK
+        uuid conversation_id FK
+        string role &quot;user | assistant&quot;
+        text content
+        jsonb citations &quot;nullable&quot;
+        text thinking &quot;nullable&quot;
+    }
+</pre>
+<hr />
+<h3 id="ownership-and-cascade-rules">Ownership and cascade rules</h3>
+<p>Deleting a user erases everything they own, in one cascade. The FKs are wired so the database does the cleanup — there is no application-level "delete all the children" code to keep in sync.</p>
+<pre class="mermaid">flowchart TD
+    U[users] --&gt;|CASCADE| C[courses]
+    U --&gt;|CASCADE| RS[refresh_sessions]
+    C --&gt;|CASCADE| CC[course_contents]
+    C --&gt;|CASCADE| VA[video_assets]
+    C --&gt;|CASCADE| TS[transcript_segments]
+    C --&gt;|CASCADE| CH[content_chunks]
+    C --&gt;|CASCADE| CONV[chat_conversations]
+    CC --&gt;|CASCADE| VA
+    CC --&gt;|CASCADE| CH
+    VA --&gt;|CASCADE| TS
+    VA --&gt;|CASCADE| VCH[video_chapters]
+    VA --&gt;|CASCADE| CH
+    VA --&gt;|CASCADE| CONV
+    CONV --&gt;|CASCADE| MSG[chat_messages]
+    VCH -.-&gt;|SET NULL| CH
+    RS -.-&gt;|SET NULL| RS
+
+    classDef setnull fill:#fff3cd,stroke:#d39e00,color:#000;
+    class VCH,RS setnull
+</pre>
+<p>Almost every edge is <code>CASCADE</code>. The two exceptions (dashed) are the design decisions worth calling out — both choose to <strong>preserve a row and null a pointer</strong> rather than delete:</p>
+<table>
+<thead>
+<tr>
+<th>Relationship</th>
+<th>Rule</th>
+<th>Why not CASCADE</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>video_chapters</code> → <code>content_chunks.chapter_id</code></td>
+<td><strong>SET NULL</strong></td>
+<td>Chapters are a <em>best-effort label</em> on a chunk, not its reason for existing. Re-running chapterization deletes and recreates chapter rows; if that cascaded, it would wipe the retrieval corpus every time chapters regenerated. Nulling <code>chapter_id</code> lets a chunk outlive the chapter that happened to label it. (See the <a href="#a-note-on-chapters">chapters note</a> — even dormant, this row is wired into retrieval.)</td>
+</tr>
+<tr>
+<td><code>refresh_sessions</code> → <code>replaced_by_id</code> (self-ref)</td>
+<td><strong>SET NULL</strong></td>
+<td>The rotation chain is auditing metadata, not a hard dependency. Pruning an old session shouldn't fail because a newer one points back at it.</td>
+</tr>
+</tbody>
+</table>
+<p>Everything else cascades because the child genuinely has no meaning without its parent: a transcript segment without its video, a chat message without its conversation.</p>
+<hr />
+<h3 id="the-retrieval-corpus-content_chunks">The retrieval corpus: <code>content_chunks</code></h3>
+<pre class="mermaid">flowchart LR
+    subgraph row[&quot;content_chunks row&quot;]
+        T[&quot;text (Text)&quot;]
+        E[&quot;embedding&lt;br/&gt;vector(1536), NULLABLE&quot;]
+        M[&quot;metadata (JSONB)&quot;]
+    end
+
+    T --&gt; BM25[&quot;content_chunks_bm25_idx&lt;br/&gt;USING bm25 (text)&lt;br/&gt;text_config = simple&quot;]
+    E --&gt; HNSW[&quot;content_chunks_embedding_hnsw_idx&lt;br/&gt;USING hnsw (vector_cosine_ops)&lt;br/&gt;m=16, ef_construction=64&quot;]
+
+    BM25 --&gt; LEX[[&quot;lexical leg&lt;br/&gt;(BM25 ranking)&quot;]]
+    HNSW --&gt; SEM[[&quot;semantic leg&lt;br/&gt;(cosine kNN)&quot;]]
+
+    classDef idx fill:#e7f1ff,stroke:#2563eb,color:#000;
+    class BM25,HNSW idx
+</pre>
+<p>Both indexes come from Postgres extensions</p>
+<ul>
+<li><strong><code>pg_textsearch</code></strong> provides the <code>bm25</code> access method. The index uses the language-agnostic <code>simple</code> config — no stemming or stop-word removal, which is the safe default for mixed/unknown lecture languages (although now we only support English).</li>
+<li><strong><code>vector</code></strong> (pgvector) provides the <code>vector(d)</code> column type and the <code>hnsw</code> index. We are using <code>EMBEDDING_DIMS = 1536</code>.</li>
+</ul>
+<hr />
+<h2 id="video-processing">Video processing</h2>
+<p>This is the <strong>write path</strong>: how a raw lecture video becomes a transcribed, chaptered, summarized, and <em>searchable</em> asset. It's the half of the system that runs before anyone asks a question — the <a href="#rag-and-ai-md">RAG pipeline</a> is the read path that consumes what this produces.</p>
+<p>The tables this writes to: <code>video_assets</code>, <code>transcript_segments</code>, <code>video_chapters</code>, <code>content_chunks</code>.</p>
+<blockquote>
+<p><strong>Where the code lives:</strong> <code>app/api/v1/uploads.py</code> (presign), <code>app/api/v1/video_assets.py</code> (finalize + transcribe endpoints), and <code>app/services/transcription.py</code> (the background task). Chunking is <code>app/services/transcript_chunk_ingestion.py</code>; chapters <code>app/services/video_chapters.py</code>; AI artifacts <code>app/services/lecture_artifacts.py</code> + <code>course_summary.py</code>.</p>
+</blockquote>
+<hr />
+<h3 id="1-the-upload-handshake">1. The upload handshake</h3>
+<p>The API <strong>never proxies video bytes</strong>. The browser uploads straight to S3 through a presigned <code>PUT</code>, and only then tells the backend "it's there." This keeps large uploads off the application server entirely.</p>
+<pre class="mermaid">sequenceDiagram
+    participant B as Browser
+    participant API as FastAPI
+    participant S3 as Amazon S3
+    participant BG as Background task
+
+    B-&gt;&gt;API: POST /uploads/presign&lt;br/&gt;(courseId, filename, contentType, sizeBytes)
+    Note over API: owns course? size ok?&lt;br/&gt;contentType video/* ?
+    API--&gt;&gt;B: presigned PUT url + key&lt;br/&gt;users/{uid}/courses/{cid}/{uuid}_name
+
+    B-&gt;&gt;S3: PUT video bytes (direct)
+    S3--&gt;&gt;B: 200 OK
+
+    B-&gt;&gt;API: POST /courses/{id}/videos&lt;br/&gt;(source_file_key, kickoffTranscription)
+    Note over API: atomic: create course_contents (media)&lt;br/&gt;+ video_assets (1:1), status=uploaded&lt;br/&gt;idempotent on source_file_key
+    API-&gt;&gt;API: status = extracting_audio
+    API-&gt;&gt;BG: enqueue transcribe_video_asset
+    API--&gt;&gt;B: { content, video_asset }
+
+    BG--&gt;&gt;S3: (later) download, transcode, transcribe…
+</pre>
+<hr />
+<h3 id="2-the-status-lifecycle">2. The status lifecycle</h3>
+<pre class="mermaid">stateDiagram-v2
+    direction LR
+    [*] --&gt; uploaded: finalize
+    uploaded --&gt; extracting_audio: kickoff / transcribe
+    extracting_audio --&gt; transcribing: audio uploaded to S3
+    extracting_audio --&gt; error: ffmpeg failure
+
+    transcribing --&gt; done: chunks + embeddings written
+    transcribing --&gt; done_no_embeddings: chunks written, no embeddings
+    transcribing --&gt; done_no_index: transcript saved, indexing failed
+    transcribing --&gt; error: no segments / Runpod / timeout
+
+    done --&gt; [*]
+    done_no_embeddings --&gt; [*]
+    done_no_index --&gt; [*]
+    error --&gt; [*]
+</pre>
+<hr />
+<h3 id="3-inside-the-background-task">3. Inside the background task</h3>
+<p><strong>Part 1 — acquire audio, then transcribe &amp; persist:</strong></p>
+<pre class="mermaid">flowchart LR
+    subgraph P1[Acquire]
+        A[Load asset&lt;br/&gt;guard: source_file_key present] --&gt; B[Download video from S3&lt;br/&gt;streamed to temp file] --&gt; C[ffmpeg: thumbnail frame&lt;br/&gt;adaptive seek, scale 640] --&gt; D[ffmpeg: extract audio&lt;br/&gt;mono / 16 kHz PCM WAV] --&gt; E[Upload audio to S3&lt;br/&gt;+ presign a GET url]
+    end
+    subgraph P2[Transcribe &amp; persist]
+        F[Runpod faster-whisper&lt;br/&gt;runsync OR run+poll] --&gt; G{non-empty&lt;br/&gt;segments?}
+        G --&gt;|yes| H[Replace-all&lt;br/&gt;transcript_segments]
+    end
+
+    E --&gt; F
+    G --&gt;|no| ERR[status = error]
+    H --&gt; NEXT([continue to part 2 ▼])
+
+    classDef fatal fill:#f8d7da,stroke:#dc3545,color:#000;
+    classDef best fill:#d1e7dd,stroke:#198754,color:#000;
+    class ERR fatal
+    class C best
+</pre>
+<p><strong>Part 2 — index for retrieval, then generate artifacts:</strong></p>
+<pre class="mermaid">flowchart LR
+    PREV([from part 1: transcript_segments]) --&gt; I
+    subgraph P3[Index]
+        I[Chapterize&lt;br/&gt;best-effort] --&gt; J[Ingest chunks&lt;br/&gt;content_chunks + embeddings] --&gt; K[Set terminal status&lt;br/&gt;done / no_embeddings / no_index]
+    end
+    subgraph P4[Artifacts]
+        L[Lecture artifacts&lt;br/&gt;title / desc / summary] --&gt; M[Refresh course summary] --&gt; N([done])
+    end
+
+    K --&gt; L
+
+    classDef best fill:#d1e7dd,stroke:#198754,color:#000;
+    class I,L,M best
+</pre>
+<p>Green stages are <strong>best-effort</strong> — they're wrapped in <code>try/except</code> and can never fail the pipeline. Red is the only kind of fatal: a hard failure before a transcript exists.</p>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>What happens</th>
+<th>Failure mode</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Download</td>
+<td>Streams the S3 object to a temp file (never loads the whole video into memory).</td>
+<td>Missing key → <code>error</code>.</td>
+</tr>
+<tr>
+<td>Thumbnail</td>
+<td>One ffmpeg frame for the library UI. Seek point adapts — longer videos seek further in to skip black intro frames (<code>ffprobe</code> reads duration).</td>
+<td>Best-effort; skipped on failure.</td>
+</tr>
+<tr>
+<td>Audio</td>
+<td>ffmpeg normalizes to mono / 16 kHz PCM WAV — the format faster-whisper wants.</td>
+<td>ffmpeg failure → <code>error</code> ("ffmpeg failed").</td>
+</tr>
+<tr>
+<td>Upload audio</td>
+<td>WAV goes back to S3 and is presigned, because Runpod fetches it over HTTPS (it can't reach your S3 credentials).</td>
+<td>Exception → <code>error</code>.</td>
+</tr>
+<tr>
+<td>Transcribe</td>
+<td>Runpod serverless faster-whisper. Output parsed into timestamped segments.</td>
+<td>Job failure / timeout / <strong>no segments</strong> → <code>error</code>.</td>
+</tr>
+<tr>
+<td>Persist</td>
+<td><strong>Replace-all</strong> for <code>(video_asset_id, language_code)</code> — re-running is safe.</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Chapters</td>
+<td>Best-effort; see <a href="#chapters-dormant-but-wired">below</a>.</td>
+<td>Never fails the pipeline.</td>
+</tr>
+<tr>
+<td>Ingest</td>
+<td>Chunk + embed into <code>content_chunks</code>; decides the terminal <code>done_*</code> status.</td>
+<td>Failure → <code>done_no_index</code> (transcript survives).</td>
+</tr>
+<tr>
+<td>Artifacts</td>
+<td>AI title / description / summary, only if missing.</td>
+<td>Best-effort.</td>
+</tr>
+<tr>
+<td>Course summary</td>
+<td>Re-roll the course-level summary now a new lecture exists.</td>
+<td>Best-effort.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="4-from-transcript-to-retrieval-corpus">4. From transcript to retrieval corpus</h3>
+<p>Persisting <code>transcript_segments</code> makes a lecture <em>playable</em>. Making it <em>searchable</em> is a separate step: <code>ingest_video_asset_transcript_to_chunks</code> rewrites the raw whisper segments into retrieval-sized chunks in <code>content_chunks</code>.</p>
+<pre class="mermaid">flowchart LR
+    SEG[&quot;transcript_segments&lt;br/&gt;(many short whisper cuts)&quot;] --&gt; CH{group by chapter}
+    CH --&gt; DF[&quot;duration-first packing&lt;br/&gt;~20–30s target (cap 60s), ~400 tok soft cap&lt;br/&gt;1–2 sentence overlap&quot;]
+    DF --&gt; EMB[&quot;embed batch&lt;br/&gt;(best-effort)&quot;]
+    EMB --&gt; CC[&quot;content_chunks&lt;br/&gt;text + embedding? + metadata&quot;]
+
+    classDef best fill:#d1e7dd,stroke:#198754,color:#000;
+    class EMB best
+</pre>
+<p><strong>Why re-chunk at all?</strong> Whisper emits many short cuts (a few seconds each) — too granular to retrieve against. The ingester packs them into <strong>duration-first</strong> chunks: a chunk flushes once it holds roughly 20–30 seconds of speech (soft cap 60s — an oversized single segment is kept whole), with a soft ~400-token bound to avoid runaway chunks and a 1–2 sentence overlap so a concept split across a boundary is still findable from either side. Duration is the primary axis because it maps to "a coherent thing the lecturer said," and it gives every chunk a clean <code>[start_sec, end_sec]</code> for timestamp-deep-linked citations.</p>
+<p>Chunks are computed <strong>per chapter</strong> (each chunk gets a <code>chunk_index_in_chapter</code>), which is what later powers chapter-scoped neighbor expansion at query time. Embedding is a <strong>best-effort batch</strong>: if <code>get_embeddings</code> returns vectors of the right count and dimensionality (1536) they're written, otherwise the chunks land embedding-less and the lecture becomes <code>done_no_embeddings</code>. The whole write is <strong>replace-all by <code>content_id</code></strong>, so re-ingesting a lecture cleanly supersedes the old chunks.</p>
+<p>Each chunk also carries a small <code>metadata</code> JSON blob (<code>video_asset_id</code>, <code>start_sec</code>/<code>end_sec</code>, <code>language_code</code>, <code>title</code>, <code>chapter_title</code>, plus <code>doc_type</code>, <code>source_kind</code>, and <code>original_filename</code>) used to render citations without extra joins.</p>
+<p>Semantic chapterization is <strong>feature-flagged off by default</strong> (<code>CHAPTERS_ENABLED=false</code>) and not surfaced in the player UI — so as a feature it's dormant.</p>
+<hr />
+<h2 id="teaching-assistant-rag-pipeline-ai-orchestration">Teaching assistant: RAG pipeline &amp; AI orchestration</h2>
+<p>This is the <strong>read path</strong>: how a student's question becomes a grounded, cited answer. It consumes exactly what the last section produced — the <code>content_chunks</code> corpus and <code>transcript_segments</code> — and turns it into an answer that links back to the moment in the video.</p>
+<blockquote>
+<p><strong>Where the code lives:</strong> <code>app/ai/teaching_assistant.py</code> is the orchestrator (the DSPy module + cascade). Retrieval is <code>app/rag/</code> — <code>course_retriever.py</code> (the cascade), <code>hybrid_retrieve.py</code> (BM25 + vector + RRF), <code>explicit_retrieve.py</code> (timestamp/deictic). Model tiering is <code>app/ai/model_roles.py</code> + <code>llm.py</code>. Citation post-processing is <code>app/services/chat_citations.py</code> + <code>app/api/v1/chat_v2.py</code>.</p>
+</blockquote>
+<hr />
+<h3 id="1-the-routed-cascade">1. The routed cascade</h3>
+<p>A chat turn runs through a DSPy module (<code>TeachingAssistant</code>) that routes first, then acts:</p>
+<pre class="mermaid">flowchart TD
+    Q[user query&lt;br/&gt;+ course info + history] --&gt; R{route?}
+    R --&gt;|clarify| CL[Ask a clarifying question]
+    R --&gt;|answer| AN[Answer from&lt;br/&gt;general knowledge]
+    R --&gt;|retrieve| GEN[Generate retrieval details&lt;br/&gt;query + lecture routing + target]
+    GEN --&gt; RET[[CourseRetriever cascade]]
+    RET --&gt;|docs found| ACTX[Answer from context&lt;br/&gt;numeric citations only]
+    RET --&gt;|nothing| NOCTX[Honest 'no context' answer]
+
+    classDef terminal fill:#d1e7dd,stroke:#198754,color:#000;
+    class CL,AN,ACTX,NOCTX terminal
+</pre>
+<p>The router classifies into three actions:</p>
+<ul>
+<li><strong><code>answer</code></strong> — answerable from general knowledge (definitions, "what's this course about"). No retrieval; saves latency and tokens.</li>
+<li><strong><code>clarify</code></strong> — too ambiguous to answer or search. Ask one direct question and stop.</li>
+<li><strong><code>retrieve</code></strong> — needs specifics from the lectures. Generate a search query, run the cascade, answer from what came back.</li>
+</ul>
+<p>When the router emits anything outside this set, normalization <strong>defaults to <code>retrieve</code></strong> — better to look for evidence than to guess. And if the <code>retrieve</code> branch finds nothing, it doesn't fabricate: it routes to an honest "I couldn't find that in the lectures" answer (the prompt is primed with a system note that retrieval came back empty).</p>
+<p>Each step is a <strong>DSPy signature</strong> — a typed input/output contract — wrapped in a module:</p>
+<table>
+<thead>
+<tr>
+<th>Signature</th>
+<th>Module</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>RouteQuery</code></td>
+<td><code>ChainOfThought</code></td>
+<td>Classify into answer / retrieve / clarify.</td>
+</tr>
+<tr>
+<td><code>AskClarification</code></td>
+<td><code>Predict</code></td>
+<td>Produce a clarifying question.</td>
+</tr>
+<tr>
+<td><code>AnswerWithoutContext</code></td>
+<td><code>ChainOfThought</code></td>
+<td>General-knowledge answer.</td>
+</tr>
+<tr>
+<td><code>GenerateRetrievalDetails</code></td>
+<td><code>ChainOfThought</code></td>
+<td>Emit a self-contained query, lecture routing, and an optional jump-to target.</td>
+</tr>
+<tr>
+<td><code>AnswerFromContext</code></td>
+<td><code>ChainOfThought</code></td>
+<td>Answer using only retrieved docs, with strict numeric citations.</td>
+</tr>
+</tbody>
+</table>
+<p>We also utilize DSPy's <strong><code>streamify</code></strong> for token streaming to get the "thinking" effect in the chat.</p>
+<hr />
+<h3 id="2-the-retrieval-cascade">2. The retrieval cascade</h3>
+<pre class="mermaid">flowchart TD
+    A{slug + timestamp&lt;br/&gt;given &amp; found?} --&gt;|yes| EX([explicit])
+    A --&gt;|no| B{routed lectures fit&lt;br/&gt;under char budget?}
+    B --&gt;|yes| FL([full_lecture])
+    B --&gt;|no| C{hybrid search&lt;br/&gt;on routed lectures?}
+    C --&gt;|hits| HY([hybrid])
+    C --&gt;|empty &amp; was scoped| D{course-wide&lt;br/&gt;retry?}
+    C --&gt;|empty &amp; was course-wide| NONE([none])
+    D --&gt;|hits| HCW([hybrid_course_wide])
+    D --&gt;|empty| NONE
+
+    classDef ok fill:#d1e7dd,stroke:#198754,color:#000;
+    classDef bad fill:#f8d7da,stroke:#dc3545,color:#000;
+    class EX,FL,HY,HCW ok
+    class NONE bad
+</pre>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>When it fires</th>
+<th>Strategy</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>explicit</code></td>
+<td>The model resolved a <code>(lecture, timestamp)</code> target — "in L2 at 27:36…".</td>
+<td>Deterministic window around that moment (<a href="#3-explicit--deictic-retrieval-the-chapters-payoff">§3</a>).</td>
+</tr>
+<tr>
+<td><code>full_lecture</code></td>
+<td>One or a few routed lectures whose full transcript fits a character budget.</td>
+<td>Feed the whole transcript — no lossy chunking when it's cheap to read it all.</td>
+</tr>
+<tr>
+<td><code>hybrid</code></td>
+<td>The routed lectures are too big for full-text; search within them.</td>
+<td>BM25 + vector + RRF, scoped to those lectures (<a href="#4-hybrid-retrieval">§4</a>).</td>
+</tr>
+<tr>
+<td><code>hybrid_course_wide</code></td>
+<td>A <em>scoped</em> hybrid search came back empty.</td>
+<td>Retry across the whole course — rescues a confident-but-wrong lecture pick.</td>
+</tr>
+<tr>
+<td><code>none</code></td>
+<td>Nothing matched anywhere.</td>
+<td>Caller switches to the honest "no context" answer.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="3-hybrid-retrieval">3. Hybrid retrieval</h3>
+<p>For the <code>hybrid</code> paths, two independent legs run over <code>content_chunks</code> and get fused:</p>
+<pre class="mermaid">flowchart LR
+    Q[contextualized query] --&gt; LEX[Lexical leg&lt;br/&gt;pg_textsearch BM25&lt;br/&gt;top 20]
+    Q --&gt; EMB[embed query]
+    EMB --&gt; SEM[Semantic leg&lt;br/&gt;pgvector cosine, HNSW&lt;br/&gt;top 20]
+    LEX --&gt; RRF[RRF fuse&lt;br/&gt;k0=60 → top 8]
+    SEM --&gt; RRF
+    RRF --&gt; NB[Neighbor expansion&lt;br/&gt;±1 chunk in chapter]
+    NB --&gt; DOCS[retrieved docs]
+
+    SEM -.-&gt;|unavailable| LEXONLY[lexical-only&lt;br/&gt;still expands neighbors]
+    LEXONLY -.-&gt; NB
+</pre>
+<ul>
+<li><strong>Lexical leg</strong> — Postgres <code>pg_textsearch</code> BM25 over the chunk text. Always runs.</li>
+<li><strong>Semantic leg</strong> — embed the query (OpenAI <code>text-embedding-3-small</code>, 1536-dim) and rank by pgvector cosine distance over the HNSW index. <strong>Best-effort.</strong></li>
+<li><strong>RRF fusion</strong> — [Reciprocal Rank Fusion] each leg contributes <code>1/(k0 + rank)</code> per hit (<code>k0=60</code>), summed across legs, deduped by <code>chunk_id</code> (with <code>id</code> / content-prefix fallbacks), top 8. RRF needs no score calibration between the two legs — it works purely on ranks, which is what makes mixing BM25 scores with cosine distances clean.</li>
+<li><strong>Neighbor expansion</strong> — after fusion, pull ±1 neighboring chunk</li>
+</ul>
+<hr />
+<h2 id="future-direction-the-feedback-gepa-loop">Future direction: the feedback → GEPA loop</h2>
+<p>ClassMate's next feature closes the loop between students and the AI pipeline: students <strong>rate answers</strong>, low ratings say <strong>what went wrong</strong>, and that signal becomes training data for <strong><a href="https://dspy.ai/api/optimizers/GEPA/">GEPA</a></strong> — DSPy's reflective prompt optimizer — which rewrites the tutor's prompts and ships them back to production behind a gate. A star rating becomes stage-level training signal.</p>
+<blockquote>
+<p><strong>Status: designed and built, not yet shipped.</strong> The frontend ("Help ClassMate learn") lives on this branch behind <code>VITE_FEEDBACK_ENABLED</code> (off by default) and currently runs on a localStorage stub. The backend — feedback API, answer snapshots, and the whole optimization harness — exists as work-in-progress on the <strong><code>feedback-gepa-backend</code></strong> branch.</p>
+</blockquote>
+<hr />
+<h3 id="the-loop-at-a-glance">The loop at a glance</h3>
+<pre class="mermaid">flowchart LR
+    RATE[student rates answer&lt;br/&gt;1–5 stars] --&gt;|≤2★ requires&lt;br/&gt;a category| TAG[category tags the&lt;br/&gt;failing pipeline stage]
+    RATE --&gt; SNAP[(answer snapshot&lt;br/&gt;full inputs + outputs)]
+    TAG --&gt; SNAP
+    SNAP --&gt; GEPA[GEPA optimizes&lt;br/&gt;the DSPy prompts&lt;br/&gt;offline]
+    GEPA --&gt; GATE{ship gate&lt;br/&gt;+ judge validation}
+    GATE --&gt;|passes| ART[versioned artifact,&lt;br/&gt;committed to git]
+    GATE --&gt;|fails| GEPA
+    ART --&gt;|TUTOR_PROGRAM_ARTIFACT| LIVE[live tutor serves&lt;br/&gt;optimized prompts]
+    LIVE --&gt; RATE
+
+    classDef gate fill:#fff3cd,stroke:#d39e00,color:#000;
+    class GATE gate
+</pre>
+<hr />
+<h3 id="1-capturing-feedback">1. Capturing feedback</h3>
+<h4 id="the-ux-already-built-behind-the-flag">The UX (already built, behind the flag)</h4>
+<ul>
+<li>A global <strong>"Help ClassMate learn"</strong> opt-in toggle in the account menu (Navbar). Everything is consent-first — no opt-in, no rating UI, no data capture.</li>
+<li>Under each finished, persisted assistant answer (course chat and video chat): a <strong>1–5 star</strong> rating row. Picking a rating opens a popover — a <strong>rating ≤ 2★ requires a "what went wrong?" category</strong> (that's the credit-assignment signal, so there's no skip button); higher ratings take an optional comment. Submitted feedback collapses to a compact "Thanks — noted ★★★☆☆" with an edit link.</li>
+<li>Ratings only appear on <em>persisted</em> messages — the message id is what feedback and snapshots key on.</li>
+</ul>
+<hr />
+<h3 id="2-credit-assignment-category-stage">2. Credit assignment: category → stage</h3>
+<p>The four "what went wrong?" categories map to the pipeline stage that can fix them:</p>
+<table>
+<thead>
+<tr>
+<th>Category (UI label)</th>
+<th>Stage blamed</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>unnecessary_clarification</code> — "Asked me to clarify unnecessarily"</td>
+<td><strong>router</strong></td>
+</tr>
+<tr>
+<td><code>wrong_lecture</code> — "Wrong / missing lecture"</td>
+<td><strong>query_generator</strong> (retrieval details)</td>
+</tr>
+<tr>
+<td><code>bad_answer</code> — "Answer wrong, vague, or too long"</td>
+<td><strong>answer</strong> step</td>
+</tr>
+<tr>
+<td><code>other</code> — "Something else"</td>
+<td><em>none</em> — no reliable attribution</td>
+</tr>
+</tbody>
+</table>
+<p>This mapping lives in a dependency-free module (<code>app/schemas/feedback.py</code>) so both the API and the offline optimizer import it without pulling DSPy into the request path. During optimization, the metric routes the student's verbatim comment <strong>only to the blamed predictor</strong> — the router never hears about a bad answer, and vice versa. Untagged feedback (≥3★ or <code>other</code>) falls back to heuristics: routing predictors hear about retrieval recall, the answer predictor hears the LLM judge.</p>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  try { await mermaid.run({ querySelector: "pre.mermaid" }); }
+  finally { document.body.dataset.mermaidDone = "1"; }
+</script>
+</body></html>

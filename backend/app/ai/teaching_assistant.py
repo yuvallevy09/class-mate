@@ -443,11 +443,11 @@ class TeachingAssistant(dspy.Module):
             raise ValueError("user_query must be non-empty")
 
         # Each signature gets a purpose-built projection of the course (see the
-        # `CourseInfo.to_*` views). The router/clarifier/no-context fallback get
-        # the lean catalog; query generation gets the rich summaries that drive
-        # lecture routing; answer-from-context gets only the header (its content
-        # comes from the retrieved docs, and a richer view would invite uncited
-        # claims). Rendered lazily so we only pay for the views a branch uses.
+        # `CourseInfo.to_*` views). The router, clarifier, query generation, and
+        # the no-context fallback all get the lean catalog (`to_basic_info`);
+        # answer-from-context gets only the header (its content comes from the
+        # retrieved docs, and a richer view would invite uncited claims). The
+        # rich `to_detailed_info` view is not wired in yet.
         #
         # In video mode (`viewing` set) a one-line anchor is prefixed to every
         # view so signatures can resolve deictic references to the watched
