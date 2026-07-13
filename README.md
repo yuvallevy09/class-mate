@@ -5,8 +5,8 @@ ClassMate is a study companion for **lecture videos**. You upload a course's lec
 Instead of a generic chatbot, the assistant is grounded in your lectures, enabling questions like:
 
 - “Where did we cover matrix multiplication?”
-- “Summarize what the professor said between minutes 12 and 20 of lecture 3.”
-- “I'm at 27:36 in this lecture — what is she referring to here?”
+- “Can you compare the proof for PCA in this lecture and the one in lecture 6?”
+- “(While viewing the lecture) Can you explain what the prof said in a more intuitive way?”
 
 > **Scope today:** ClassMate handles **video lectures only**. Uploads are restricted to `video/*` (the presign gate; finalize re-checks any supplied MIME type), the DB constrains content to `category = 'media'`, and the UI flow is video-only. (A generic course-contents API layer exists underneath, built for future non-video content.) There is no PDF/notes/slides ingestion in this version — see the [Roadmap](#roadmap).
 
