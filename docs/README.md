@@ -48,6 +48,8 @@ Read in this order — it follows the data's lifecycle (model it → get it in �
 
 There's also a look ahead: **[Coming soon](./coming-soon.md)** — the feedback → GEPA loop (per-answer star ratings, stage-level credit assignment, and gated prompt optimization). Designed and built on a side branch, not yet shipped.
 
+For what all of this looks like to a student, see the **[UI walkthrough](./ui.md)** — a screen-by-screen tour with screenshots, from login through the citation popover.
+
 ---
 
 ## Stack, in one place
